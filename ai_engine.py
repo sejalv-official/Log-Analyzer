@@ -8,7 +8,7 @@ def generate_remediation_playbook(error_lines, incident_type="performance"):
     if not error_lines:
         return "No logs provided for analysis."
         
-    log_payload = "\n".join(error_lines)
+    log_payload = "\n".join(str(line) for line in error_lines)
     
     if incident_type == "security":
         system_prompt = (
