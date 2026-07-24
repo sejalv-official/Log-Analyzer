@@ -12,12 +12,27 @@ def extract_critical_logs(file_content):
         "structured_data": []
     }
     
+    # FAST PRE-FILTER: Only send lines that look remotely suspicious to the AI
+    # This prevents sending 10,000 normal log lines to an LLM.
+    suspicious_keywords = ["ERROR", "WARN", "FAIL", "DENIED", "CRITICAL", "50", "40", "EXCEPTION", "TIMEOUT", "UNAUTHORIZED"]
+    
     lines = file_content.splitlines()
+    suspicious_lines = []
+    
+    for i, line in enumerate(lines):
+        upper_line = line.upper()
+        if any(keyword in upper_line for keyword in suspicious_keywords):
+            suspicious_lines.append(f"Line {i+1}: {line}")
+            
+    # If no suspicious lines, return empty immediately
+    if not suspicious_lines:
+        return results
+        
     chunk_size = 50
     
-    for i in range(0, len(lines), chunk_size):
-        chunk = lines[i:i + chunk_size]
-        chunk_text = "\n".join(f"Line {i+j+1}: {line}" for j, line in enumerate(chunk) if line.strip())
+    for i in range(0, len(suspicious_lines), chunk_size):
+        chunk = suspicious_lines[i:i + chunk_size]
+        chunk_text = "\n".join(chunk)
         
         if not chunk_text.strip():
             continue
