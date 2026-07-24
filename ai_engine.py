@@ -64,7 +64,7 @@ def ai_analyze_log_chunk(log_chunk):
         '  "security": ["line 1 text", "line 2 text"],\n'
         '  "performance": ["line 3 text"],\n'
         '  "structured_data": [\n'
-        '    {"Line": "number or N/A", "Type": "Security/Performance", "Event": "event name", "User/ARN": "user", "Source IP": "ip"}\n'
+        '    {"Line": "number or N/A", "Timestamp": "time", "Type": "Security/Performance", "Event": "event name", "User/ARN": "user", "Source IP": "ip"}\n'
         "  ]\n"
         "}"
     )

@@ -1,14 +1,37 @@
+import json
+from ai_engine import ai_analyze_log_chunk
+
 def extract_critical_logs(file_content):
     """
-    Parses raw log text and extracts only lines containing critical keywords.
+    Parses raw log text using an AI-powered detection engine.
+    Chunks the logs and sends them to the local LLM for anomaly detection.
     """
-    error_keywords = ["ERROR", "502", "504", "AccessDenied", "CRITICAL", "FAILED", "403"]
-    flagged_lines = []
+    results = {
+        "security": [],
+        "performance": [],
+        "structured_data": []
+    }
     
     lines = file_content.splitlines()
-    for line_number, line in enumerate(lines, 1):
-        clean_line = line.strip()
-        if any(keyword in clean_line for keyword in error_keywords):
-            flagged_lines.append(f"Line {line_number}: {clean_line}")
+    chunk_size = 50
+    
+    for i in range(0, len(lines), chunk_size):
+        chunk = lines[i:i + chunk_size]
+        chunk_text = "\n".join(f"Line {i+j+1}: {line}" for j, line in enumerate(chunk) if line.strip())
+        
+        if not chunk_text.strip():
+            continue
             
-    return flagged_lines
+        # Send to AI
+        ai_result = ai_analyze_log_chunk(chunk_text)
+        
+        # Merge results
+        if isinstance(ai_result, dict):
+            if "security" in ai_result and isinstance(ai_result["security"], list):
+                results["security"].extend(ai_result["security"])
+            if "performance" in ai_result and isinstance(ai_result["performance"], list):
+                results["performance"].extend(ai_result["performance"])
+            if "structured_data" in ai_result and isinstance(ai_result["structured_data"], list):
+                results["structured_data"].extend(ai_result["structured_data"])
+                
+    return results

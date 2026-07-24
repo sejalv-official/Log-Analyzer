@@ -4,7 +4,9 @@ import hashlib
 from log_parser import extract_critical_logs
 from ai_engine import generate_remediation_playbook, chat_with_logs, generate_proactive_defenses, generate_log_query
 from s3_fetcher import list_s3_buckets, fetch_latest_s3_log
+from metrics_engine import generate_timeseries_dataframe
 import time
+import altair as alt
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(
@@ -157,7 +159,24 @@ with main_tab1:
             st.success("✅ **Clean Scan!** No critical error signatures detected.")
         else:
             st.warning(f"⚠️ **Found {total_flagged} critical log entries requiring attention.**")
+            
+            # --- VISUAL TELEMETRY ---
             if results["structured_data"]:
+                df_timeseries = generate_timeseries_dataframe(results["structured_data"])
+                if not df_timeseries.empty:
+                    st.markdown("#### 📈 Visual Telemetry (Anomaly Timeline)")
+                    
+                    chart = alt.Chart(df_timeseries).mark_area(opacity=0.6, interpolate='monotone').encode(
+                        x=alt.X('Timestamp:T', title='Time (Min)'),
+                        y=alt.Y('Count:Q', title='Incident Count'),
+                        color=alt.Color('Type:N', scale=alt.Scale(domain=['Security', 'Performance'], range=['#ff4b4b', '#ffa421'])),
+                        tooltip=['Timestamp:T', 'Type:N', 'Count:Q']
+                    ).properties(
+                        height=250
+                    ).interactive()
+                    
+                    st.altair_chart(chart, use_container_width=True)
+                
                 st.markdown("#### 📊 Auto-Extracted Context")
                 st.dataframe(pd.DataFrame(results["structured_data"]), use_container_width=True, hide_index=True)
                 
