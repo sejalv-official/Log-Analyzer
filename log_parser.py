@@ -1,14 +1,22 @@
-def extract_critical_logs(file_content):
+def prepare_raw_logs_for_ai(log_text, max_lines=200):
     """
-    Parses raw log text and extracts only lines containing critical keywords.
+    Prepares raw logs for AI analysis without keyword filtering.
+    If the log is very large, it samples the head and tail lines to fit 
+    within the AI model's context window.
     """
-    error_keywords = ["ERROR", "502", "504", "AccessDenied", "CRITICAL", "FAILED", "403"]
-    flagged_lines = []
-    
-    lines = file_content.splitlines()
-    for line_number, line in enumerate(lines, 1):
-        clean_line = line.strip()
-        if any(keyword in clean_line for keyword in error_keywords):
-            flagged_lines.append(f"Line {line_number}: {clean_line}")
-            
-    return flagged_lines
+    if not log_text or not isinstance(log_text, str):
+        return ""
+
+    lines = log_text.splitlines()
+
+    # If log is small enough, return as-is
+    if len(lines) <= max_lines:
+        return "\n".join(lines)
+
+    # Otherwise, sample the first 100 lines (startup context) and last 100 lines (recent events)
+    half = max_lines // 2
+    head = lines[:half]
+    tail = lines[-half:]
+
+    sampled_log = "\n".join(head) + f"\n\n... [TRUNCATED {len(lines) - max_lines} MIDDLE LINES FOR AI CONTEXT] ...\n\n" + "\n".join(tail)
+    return sampled_log

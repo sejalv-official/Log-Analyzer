@@ -1,8 +1,17 @@
 import time
 import streamlit as st
-from log_parser import extract_critical_logs
-from ai_engine import generate_remediation_playbook
-from s3_fetcher import list_s3_buckets, fetch_latest_s3_log
+
+# --- PARSER AND AI ENGINE IMPORTS ---
+from log_parser import prepare_raw_logs_for_ai
+from ai_engine import analyze_raw_logs_with_ai
+
+# --- AWS FETCHERS INGESTION IMPORTS ---
+from aws_fetcher import (
+    list_s3_buckets, 
+    fetch_latest_s3_log, 
+    fetch_cloudwatch_logs, 
+    fetch_cloudtrail_events
+)
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(
@@ -18,20 +27,25 @@ with st.sidebar:
     st.title("Settings & Status")
     
     st.markdown("### ⚙️ Engine Config")
-    st.info("**Model:** `llama3.2` (Local)\n\n**Mode:** Multi-Feature Isolation")
+    st.info("**Model:** `llama3.2` (Local)\n\n**Mode:** Full AI Context Inspection")
     
     st.markdown("---")
     st.markdown("### ☁️ AWS Config")
-    aws_region = st.text_input("AWS Region", value="us-east-1")
+    aws_region = st.text_input("AWS Region", value="us-east-1", key="aws_region_input")
     st.caption("Ensure AWS credentials are configured via active terminal session.")
 
 # --- HEADER ---
 st.title("🛡️ AI-Powered Log Analyzer & Incident Triage")
-st.caption("Automated L1 Incident Triage for Real-Time AWS S3 Logs, Static Log Files, and Raw Text")
+st.caption("Autonomous L1 Incident Triage for Real-Time AWS S3 Logs, CloudWatch, CloudTrail, and Local Files")
 st.markdown("---")
 
-# --- INPUT TABS ---
-tab1, tab2, tab3 = st.tabs(["🪣 AWS S3 Auto-Sync", "📋 Paste Raw Text", "📁 Upload Log File"])
+# --- TAB NAVIGATION ---
+tab1, tab2, tab3, tab4 = st.tabs([
+    "🪣 AWS S3", 
+    "📈 AWS CloudWatch", 
+    "🛡️ AWS CloudTrail", 
+    "📁 Upload / Paste Logs"
+])
 
 
 # ==========================================
@@ -63,12 +77,12 @@ with tab1:
         manual_sync = st.button("📡 Sync Once Now", type="secondary", use_container_width=True, key="btn_s3_sync")
         
     with col_auto:
-        auto_poll = st.toggle("🔄 Enable Hands-Free Live Auto-Polling", value=False, key="s3_auto_poll_toggle")
-        if auto_poll:
-            poll_interval = st.slider("Poll Interval (Seconds):", min_value=10, max_value=300, value=30, step=10, key="s3_poll_slider")
+        auto_poll_s3 = st.toggle("🔄 Enable Hands-Free Live Auto-Polling", value=False, key="s3_auto_poll_toggle")
+        if auto_poll_s3:
+            s3_poll_interval = st.slider("Poll Interval (Seconds):", min_value=10, max_value=300, value=30, step=10, key="s3_poll_slider")
 
     # Fetching & Output Logic for Tab 1
-    if manual_sync or auto_poll:
+    if manual_sync or auto_poll_s3:
         if selected_bucket:
             with st.spinner(f"Scanning `{selected_bucket}` for new logs..."):
                 content, status_msg = fetch_latest_s3_log(selected_bucket, s3_prefix, aws_region)
@@ -81,137 +95,200 @@ with tab1:
         else:
             st.warning("Please specify a valid S3 Bucket name.")
 
-    # Dedicated S3 Output Window
+    # Dedicated S3 AI Inspector Output
     if 's3_logs' in st.session_state and st.session_state['s3_logs'].strip():
         s3_log_text = st.session_state['s3_logs']
-        matched_errors = extract_critical_logs(s3_log_text)
+        prepared_log = prepare_raw_logs_for_ai(s3_log_text)
         
-        st.markdown("#### 📊 S3 Log Analysis Dashboard")
-        col1, col2 = st.columns(2)
-        col1.metric(label="Total Lines Scanned", value=len(s3_log_text.splitlines()))
-        col2.metric(label="Critical Issues Flagged", value=len(matched_errors))
+        st.markdown("#### 📊 S3 Log Analytics Workspace")
+        st.metric(label="Total Lines Ingested", value=len(s3_log_text.splitlines()))
 
-        if not matched_errors:
-            st.success("✅ **Clean Scan!** No critical error signatures detected in the current S3 log.")
-        else:
-            st.warning(f"⚠️ **Found {len(matched_errors)} critical log entries.**")
-            with st.expander("👁️ View Isolated S3 Error Snippets", expanded=True):
-                for err in matched_errors:
-                    st.code(err, language="log")
-            
-            if st.button("🚀 Generate S3 AI Remediation Guide", type="primary", use_container_width=True, key="btn_s3_ai"):
-                with st.spinner("🤖 Llama 3.2 is analyzing S3 errors..."):
-                    report = generate_remediation_playbook(matched_errors)
-                    st.markdown("---")
-                    st.success("✨ Analysis Complete!")
-                    st.markdown(report)
-                    st.download_button(
-                        label="📥 Download S3 Remediation Report (.md)",
-                        data=report,
-                        file_name="s3_remediation_playbook.md",
-                        mime="text/markdown",
-                        key="dl_s3_report"
-                    )
+        with st.expander("👁️ View Raw S3 Stream Sample", expanded=False):
+            st.code(prepared_log, language="log")
+
+        if st.button("🚀 Analyze Raw Stream with Llama 3.2", type="primary", use_container_width=True, key="btn_s3_ai"):
+            with st.spinner("🤖 Llama 3.2 is reading raw S3 stream and detecting anomalies..."):
+                report = analyze_raw_logs_with_ai(prepared_log)
+                st.markdown("---")
+                st.success("✨ Analysis Complete!")
+                st.markdown(report)
+                st.download_button(
+                    label="📥 Download S3 Incident Report (.md)",
+                    data=report,
+                    file_name="s3_ai_incident_report.md",
+                    mime="text/markdown",
+                    key="dl_s3_report"
+                )
 
 
 # ==========================================
-# 📋 TAB 2: RAW TEXT INPUT & OUTPUT
+# 📈 TAB 2: CLOUDWATCH LOGS WORKSPACE
 # ==========================================
 with tab2:
-    st.markdown("### 📋 Manual Raw Text Analysis")
+    st.markdown("### 📈 CloudWatch Log Ingestion")
     
-    pasted_logs = st.text_area(
-        "Paste raw log entries here:",
-        height=180,
-        placeholder="e.g., 2026-07-23 14:32:05 ALB 502 Bad Gateway AccessDenied...",
-        key="raw_pasted_logs"
-    )
-    
-    analyze_raw_btn = st.button("🔍 Analyze Raw Text", type="primary", key="btn_raw_analyze")
+    col_group, col_stream = st.columns([2, 1])
+    with col_group:
+        cw_group = st.text_input("CloudWatch Log Group Name:", placeholder="/aws/lambda/my-function", key="cw_group_input")
+    with col_stream:
+        cw_stream = st.text_input("Log Stream Name (Optional):", placeholder="Latest active stream used if empty", key="cw_stream_input")
 
-    # Dedicated Raw Text Output Window
-    if analyze_raw_btn or pasted_logs.strip():
-        if pasted_logs.strip():
-            matched_errors = extract_critical_logs(pasted_logs)
-            
-            st.markdown("#### 📊 Raw Text Analysis Dashboard")
-            col1, col2 = st.columns(2)
-            col1.metric(label="Total Lines Scanned", value=len(pasted_logs.splitlines()))
-            col2.metric(label="Critical Issues Flagged", value=len(matched_errors))
+    fetch_cw_btn = st.button("📡 Fetch CloudWatch Logs", type="primary", key="btn_cw_fetch")
 
-            if not matched_errors:
-                st.success("✅ **Clean Scan!** No critical error signatures detected in pasted text.")
-            else:
-                st.warning(f"⚠️ **Found {len(matched_errors)} critical log entries.**")
-                with st.expander("👁️ View Isolated Raw Error Snippets", expanded=True):
-                    for err in matched_errors:
-                        st.code(err, language="log")
-                
-                if st.button("🚀 Generate Raw Text AI Remediation Guide", type="primary", use_container_width=True, key="btn_raw_ai"):
-                    with st.spinner("🤖 Llama 3.2 is analyzing raw text errors..."):
-                        report = generate_remediation_playbook(matched_errors)
-                        st.markdown("---")
-                        st.success("✨ Analysis Complete!")
-                        st.markdown(report)
-                        st.download_button(
-                            label="📥 Download Raw Text Report (.md)",
-                            data=report,
-                            file_name="raw_text_remediation_playbook.md",
-                            mime="text/markdown",
-                            key="dl_raw_report"
-                        )
+    if fetch_cw_btn:
+        if not cw_group:
+            st.warning("Please specify a CloudWatch Log Group Name.")
         else:
-            st.info("Paste log entries above and click analyze.")
+            with st.spinner(f"Fetching logs from CloudWatch group `{cw_group}`..."):
+                cw_logs, status_msg = fetch_cloudwatch_logs(cw_group, cw_stream, region_name=aws_region)
+                
+                if cw_logs:
+                    st.session_state['cw_logs'] = cw_logs
+                    st.success(f"✅ {status_msg}")
+                else:
+                    st.error(f"❌ {status_msg}")
+
+    # Dedicated CloudWatch AI Inspector Output
+    if 'cw_logs' in st.session_state and st.session_state['cw_logs'].strip():
+        cw_log_text = st.session_state['cw_logs']
+        prepared_log = prepare_raw_logs_for_ai(cw_log_text)
+        
+        st.markdown("#### 📊 CloudWatch Analytics Workspace")
+        st.metric(label="Total Lines Ingested", value=len(cw_log_text.splitlines()))
+
+        with st.expander("👁️ View Raw CloudWatch Stream Sample", expanded=False):
+            st.code(prepared_log, language="log")
+                    
+        if st.button("🚀 Analyze CloudWatch Stream with Llama 3.2", type="primary", use_container_width=True, key="btn_cw_ai"):
+            with st.spinner("🤖 Llama 3.2 is inspecting CloudWatch stream for errors..."):
+                report = analyze_raw_logs_with_ai(prepared_log)
+                st.markdown("---")
+                st.success("✨ Analysis Complete!")
+                st.markdown(report)
+                st.download_button(
+                    label="📥 Download CloudWatch Report (.md)",
+                    data=report,
+                    file_name="cloudwatch_ai_report.md",
+                    mime="text/markdown",
+                    key="dl_cw_report"
+                )
 
 
 # ==========================================
-# 📁 TAB 3: FILE UPLOAD & OUTPUT
+# 🛡️ TAB 3: CLOUDTRAIL EVENT WORKSPACE
 # ==========================================
 with tab3:
-    st.markdown("### 📁 Uploaded Log File Analysis")
+    st.markdown("### 🛡️ CloudTrail Security & API Audit Ingestion")
     
-    uploaded_file = st.file_uploader(
-        "Upload a log file (.log, .txt, .json)", 
-        type=["log", "txt", "json"],
-        key="file_uploader_widget"
-    )
+    col_time, col_auto = st.columns([1, 1])
     
-    # Dedicated File Upload Output Window
-    if uploaded_file is not None:
-        file_log_text = uploaded_file.read().decode("utf-8")
-        st.success(f"📄 Successfully loaded: **{uploaded_file.name}**")
-        
-        matched_errors = extract_critical_logs(file_log_text)
-        
-        st.markdown("#### 📊 File Upload Analysis Dashboard")
-        col1, col2 = st.columns(2)
-        col1.metric(label="Total Lines Scanned", value=len(file_log_text.splitlines()))
-        col2.metric(label="Critical Issues Flagged", value=len(matched_errors))
+    with col_time:
+        time_window = st.slider("Lookback Window (Minutes):", min_value=15, max_value=360, value=60, step=15, key="ct_slider")
+    
+    with col_auto:
+        auto_poll_ct = st.toggle("🔄 Enable Hands-Free Live Auto-Polling", value=False, key="ct_auto_poll_toggle")
+        if auto_poll_ct:
+            ct_poll_interval = st.slider("Poll Interval (Seconds):", min_value=10, max_value=300, value=30, step=10, key="ct_poll_slider")
 
-        if not matched_errors:
-            st.success("✅ **Clean Scan!** No critical error signatures detected in this file.")
-        else:
-            st.warning(f"⚠️ **Found {len(matched_errors)} critical log entries.**")
-            with st.expander("👁️ View Isolated File Error Snippets", expanded=True):
-                for err in matched_errors:
-                    st.code(err, language="log")
+    fetch_ct_btn = st.button("🔍 Scan CloudTrail Events Now", type="primary", use_container_width=True, key="btn_ct_fetch")
+
+    if fetch_ct_btn or auto_poll_ct:
+        with st.spinner("Scanning CloudTrail API audit logs..."):
+            ct_logs, status_msg = fetch_cloudtrail_events(minutes_back=time_window, region_name=aws_region)
             
-            if st.button("🚀 Generate File AI Remediation Guide", type="primary", use_container_width=True, key="btn_file_ai"):
-                with st.spinner("🤖 Llama 3.2 is analyzing file errors..."):
-                    report = generate_remediation_playbook(matched_errors)
-                    st.markdown("---")
-                    st.success("✨ Analysis Complete!")
-                    st.markdown(report)
-                    st.download_button(
-                        label="📥 Download File Remediation Report (.md)",
-                        data=report,
-                        file_name="file_remediation_playbook.md",
-                        mime="text/markdown",
-                        key="dl_file_report"
-                    )
+            if ct_logs:
+                st.session_state['ct_logs'] = ct_logs
+                st.success(f"✅ {status_msg} (Last checked: {time.strftime('%H:%M:%S')})")
+            else:
+                st.error(f"❌ {status_msg}")
+
+    # Dedicated CloudTrail AI Inspector Output
+    if 'ct_logs' in st.session_state and st.session_state['ct_logs'].strip():
+        ct_log_text = st.session_state['ct_logs']
+        prepared_log = prepare_raw_logs_for_ai(ct_log_text)
+        
+        st.markdown("#### 📊 CloudTrail Security Workspace")
+        st.metric(label="Total Audit Events", value=len(ct_log_text.splitlines()))
+
+        with st.expander("👁️ View Raw Audit Events Sample", expanded=False):
+            st.code(prepared_log, language="text")
+
+        if st.button("🚀 Analyze Audit Stream with Llama 3.2", type="primary", use_container_width=True, key="btn_ct_ai"):
+            with st.spinner("🤖 Llama 3.2 is auditing CloudTrail security events..."):
+                report = analyze_raw_logs_with_ai(prepared_log)
+                st.markdown("---")
+                st.success("✨ Security Audit Complete!")
+                st.markdown(report)
+                st.download_button(
+                    label="📥 Download Security Report (.md)",
+                    data=report,
+                    file_name="cloudtrail_security_report.md",
+                    mime="text/markdown",
+                    key="dl_ct_report"
+                )
 
 
-# --- AUTO-REFRESH LOOP FOR S3 AUTO-POLLING ---
-if 's3_auto_poll_toggle' in st.session_state and st.session_state['s3_auto_poll_toggle']:
-    time.sleep(poll_interval)
+# ==========================================
+# 📁 TAB 4: UPLOAD & PASTE LOGS WORKSPACE
+# ==========================================
+with tab4:
+    st.markdown("### 📁 Static Log Ingestion (Upload or Paste)")
+    
+    sub_tab1, sub_tab2 = st.tabs(["📋 Paste Raw Text", "📁 Upload Log File"])
+    
+    local_log_text = ""
+    
+    with sub_tab1:
+        pasted_logs = st.text_area(
+            "Paste raw log entries here:",
+            height=180,
+            placeholder="e.g., Paste raw web logs, container output, or stack traces...",
+            key="pasted_text_input"
+        )
+        if pasted_logs.strip():
+            local_log_text = pasted_logs
+
+    with sub_tab2:
+        uploaded_file = st.file_uploader(
+            "Upload a log file (.log, .txt, .json):", 
+            type=["log", "txt", "json"],
+            key="file_uploader_widget"
+        )
+        if uploaded_file is not None:
+            local_log_text = uploaded_file.read().decode("utf-8")
+            st.success(f"📄 Loaded file: **{uploaded_file.name}**")
+
+    # Static Logs AI Output
+    if local_log_text.strip():
+        prepared_log = prepare_raw_logs_for_ai(local_log_text)
+        
+        st.markdown("---")
+        st.markdown("#### 📊 Static Log Analytics Workspace")
+        st.metric(label="Total Lines Ingested", value=len(local_log_text.splitlines()))
+
+        with st.expander("👁️ View Uploaded Log Sample", expanded=False):
+            st.code(prepared_log, language="log")
+
+        if st.button("🚀 Analyze File/Text with Llama 3.2", type="primary", use_container_width=True, key="btn_static_ai"):
+            with st.spinner("🤖 Llama 3.2 is scanning log content for errors..."):
+                report = analyze_raw_logs_with_ai(prepared_log)
+                st.markdown("---")
+                st.success("✨ Analysis Complete!")
+                st.markdown(report)
+                st.download_button(
+                    label="📥 Download Incident Report (.md)",
+                    data=report,
+                    file_name="static_log_ai_report.md",
+                    mime="text/markdown",
+                    key="dl_static_report"
+                )
+
+
+# --- AUTO-REFRESH LOOP FOR S3 AND CLOUDTRAIL AUTO-POLLING ---
+s3_polling = st.session_state.get('s3_auto_poll_toggle', False)
+ct_polling = st.session_state.get('ct_auto_poll_toggle', False)
+
+if s3_polling or ct_polling:
+    interval = st.session_state.get('ct_poll_slider', 30) if ct_polling else st.session_state.get('s3_poll_slider', 30)
+    time.sleep(interval)
     st.rerun()
