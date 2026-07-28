@@ -2,11 +2,29 @@ import boto3
 from datetime import datetime, timedelta
 
 # ==========================================
+# 🆔 AWS ACCOUNT IDENTITY FETCHER
+# ==========================================
+def get_aws_account_info(region_name="us-east-1"):
+    """
+    Retrieves the active AWS Account ID and IAM User/Role ARN using STS.
+    Returns (account_id, arn, error_message).
+    """
+    try:
+        sts = boto3.client('sts', region_name=region_name)
+        identity = sts.get_caller_identity()
+        account_id = identity.get('Account', 'Unknown')
+        arn = identity.get('Arn', 'Unknown')
+        return account_id, arn, None
+    except Exception as e:
+        return None, None, str(e)
+
+
+# ==========================================
 # 🪣 AWS S3 LOG FETCHER
 # ==========================================
 def list_s3_buckets(region_name="us-east-1"):
     """
-    Lists all available S3 buckets using in-memory AWS credentials.
+    Lists all available S3 buckets using active AWS credentials.
     Returns (buckets_list, error_message).
     """
     try:

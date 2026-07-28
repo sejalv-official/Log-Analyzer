@@ -7,6 +7,7 @@ from ai_engine import analyze_raw_logs_with_ai
 
 # --- AWS FETCHERS INGESTION IMPORTS ---
 from aws_fetcher import (
+    get_aws_account_info,
     list_s3_buckets, 
     fetch_latest_s3_log, 
     fetch_cloudwatch_logs, 
@@ -21,7 +22,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# --- SIDEBAR: SETTINGS ---
+# --- SIDEBAR: SETTINGS & IDENTITY ---
 with st.sidebar:
     st.image("https://img.icons8.com/color/96/000000/cloud-lighting.png", width=60)
     st.title("Settings & Status")
@@ -30,9 +31,43 @@ with st.sidebar:
     st.info("**Model:** `llama3.2` (Local)\n\n**Mode:** Full AI Context Inspection")
     
     st.markdown("---")
-    st.markdown("### ☁️ AWS Config")
-    aws_region = st.text_input("AWS Region", value="us-east-1", key="aws_region_input")
-    st.caption("Ensure AWS credentials are configured via active terminal session.")
+    st.markdown("### ☁️ AWS Region Config")
+    
+    # AWS Region Selector Dropdown
+    aws_regions_list = [
+        "us-east-1",      # US East (N. Virginia)
+        "us-east-2",      # US East (Ohio)
+        "us-west-1",      # US West (N. California)
+        "us-west-2",      # US West (Oregon)
+        "ap-south-1",     # Asia Pacific (Mumbai)
+        "ap-southeast-1", # Asia Pacific (Singapore)
+        "ap-northeast-1", # Asia Pacific (Tokyo)
+        "eu-west-1",      # Europe (Ireland)
+        "eu-central-1",   # Europe (Frankfurt)
+        "sa-east-1"       # South America (São Paulo)
+    ]
+    
+    aws_region = st.selectbox(
+        "Select AWS Region:", 
+        options=aws_regions_list, 
+        index=0, 
+        key="aws_region_select"
+    )
+    
+    st.markdown("---")
+    st.markdown("### 🆔 Active Account Details")
+    
+    # Fetch and Display AWS Account ID & IAM Identity
+    account_id, user_arn, sts_error = get_aws_account_info(region_name=aws_region)
+    
+    if account_id:
+        st.success(f"🏢 **Account ID:**\n`{account_id}`")
+        with st.expander("🔑 View IAM Identity"):
+            st.caption(f"**ARN:** `{user_arn}`")
+    else:
+        st.error("❌ **AWS Credentials Inactive**")
+        if sts_error:
+            st.caption(f"⚠️ `{sts_error}`")
 
 # --- HEADER ---
 st.title("🛡️ AI-Powered Log Analyzer & Incident Triage")
