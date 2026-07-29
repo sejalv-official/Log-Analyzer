@@ -1,7 +1,7 @@
 import json
 from ai_engine import ai_analyze_log_chunk
 
-def extract_critical_logs(file_content):
+def extract_critical_logs(file_content, source_context="Unknown Source"):
     """
     Parses raw log text using an AI-powered detection engine.
     Chunks the logs and sends them to the local LLM for anomaly detection.
@@ -38,7 +38,7 @@ def extract_critical_logs(file_content):
             continue
             
         # Send to AI
-        ai_result = ai_analyze_log_chunk(chunk_text)
+        ai_result = ai_analyze_log_chunk(chunk_text, source_context)
         
         # Merge results
         if isinstance(ai_result, dict):

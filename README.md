@@ -6,9 +6,9 @@ An automated, privacy-focused incident response dashboard designed to accelerate
 
 ## 🌟 Key Features
 
-* 🔄 **Live S3 Auto-Polling:** Continuously streams and ingests the newest application or ALB log files directly from AWS S3 into memory.
-* 📁 **Hybrid Log Ingestion:** Supports both automated cloud log polling and manual log file uploads for flexible debugging.
-* 🎯 **Regex Noise Reduction:** Pre-filters raw log data by stripping out routine `200 OK` traffic to isolate failure signatures (`502`, `504`, `AccessDenied`, `Exception`).
+* 🔄 **Live Cloud Auto-Polling:** Continuously streams and ingests the newest application logs from **AWS S3, CloudWatch, and CloudTrail**.
+* 📁 **Hybrid Log Ingestion:** Supports automated cloud log polling, Assume-Role switching for multi-account triage, and manual log file uploads.
+* 🎯 **Regex & AI Noise Reduction:** Pre-filters raw log data to isolate failure signatures (`502`, `504`, `AccessDenied`, `Exception`).
 * 🤖 **Local AI Analysis:** Interfaces with a locally hosted **Llama 3.2** model to synthesize plain-English root causes, system impact, and actionable CLI/AWS fix commands.
 * 🔒 **Zero-Trust Security & Privacy:**
   * **Memory-Only AWS Credentials:** Reads credentials exclusively from active terminal session variables (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`), preventing disk credential leaks.
@@ -19,11 +19,11 @@ An automated, privacy-focused incident response dashboard designed to accelerate
 ## 🏗️ Architecture & Data Flow
 
 ```text
-[ AWS S3 Bucket ]
+[ AWS S3 / CloudWatch / CloudTrail ]
        │
-       │ (1. Stream newest log via boto3)
+       │ (1. Assume Role & Fetch Log Stream)
        ▼
-[ s3_fetcher.py ] 
+[ aws_fetcher.py ] 
        │
        │ (2. Raw log contents)
        ▼
@@ -38,7 +38,7 @@ An automated, privacy-focused incident response dashboard designed to accelerate
 ```text
 LOG-ANALYZER/
 ├── app.py           # Streamlit web UI & state management
-├── s3_fetcher.py    # Memory-only AWS S3 client & log streaming
+├── aws_fetcher.py   # Multi-account AWS client (Assume Role, S3, CloudWatch, CloudTrail)
 ├── log_parser.py    # Regex engine for noise reduction & error isolation
 ├── ai_engine.py     # Ollama API client for Llama 3.2 inference
 ├── requirements.txt # Python dependency declarations
@@ -62,5 +62,22 @@ export AWS_DEFAULT_REGION="us-east-1"
 ```bash
 ollama serve
 streamlit run app.py
-http://localhost:8501
 ```
+
+## 🏢 POD L1 Team Setup (Multi-Account Workflow)
+
+For L1/Triage teams operating in a shared-resource POD model (e.g., Service-Based Companies), this application supports seamless context switching across client AWS accounts without hardcoding static credentials.
+
+### Workflow:
+1. **Keycloak SSO Login:** The L1 engineer logs into the base company AWS account using Keycloak AWS SSO.
+2. **Base Role Access:** From there, they reach their internal Switch Role (e.g., `internal_-SwitchRole/User@company.com`).
+3. **AWS Config Extension:** The team uses an AWS Config Extension (such as AWS Extend Switch Roles) to seamlessly switch between different client accounts. 
+4. **INI Configuration:** Engineers define their roles in the extension's editor using the standard INI format. For example:
+   ```ini
+   # Lines prefixed with # are comments
+   # Section headers define the display name
+   [profile my-client-role]
+   role_arn = arn:aws:iam::123456789012:role/L1-Support-Role
+   region = us-east-1
+   ```
+5. **Fetch & Analyze:** The `aws_fetcher.py` engine leverages these assumed roles dynamically to fetch the client's logs across S3, CloudWatch, or CloudTrail without compromising the security posture of either organization.

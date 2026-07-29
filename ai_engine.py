@@ -47,7 +47,7 @@ def generate_remediation_playbook(error_lines, incident_type="performance"):
 
 import json
 
-def ai_analyze_log_chunk(log_chunk):
+def ai_analyze_log_chunk(log_chunk, source_context="Unknown Source"):
     """
     Sends a chunk of raw logs to the local LLM to dynamically detect anomalies
     and extract structured JSON metadata without using hardcoded keywords.
@@ -64,7 +64,7 @@ def ai_analyze_log_chunk(log_chunk):
         '  "security": ["line 1 text", "line 2 text"],\n'
         '  "performance": ["line 3 text"],\n'
         '  "structured_data": [\n'
-        '    {"Line": "number or N/A", "Timestamp": "time", "Type": "Security/Performance", "Event": "event name", "User/ARN": "user", "Source IP": "ip"}\n'
+        f'    {{"Line": "number or N/A", "Timestamp": "time", "Type": "Security/Performance", "Event": "event name", "User/ARN": "user", "Source IP": "ip", "Source": "{source_context}"}}\n'
         "  ]\n"
         "}"
     )
@@ -78,14 +78,21 @@ def ai_analyze_log_chunk(log_chunk):
             ]
         )
         
-        # Clean the response to parse JSON
+        # Robustly extract JSON from the response
+        import re
         content = response.message.content.strip()
-        if content.startswith("```json"):
-            content = content[7:]
-        if content.endswith("```"):
-            content = content[:-3]
-            
-        result = json.loads(content.strip())
+        
+        # Try to find a JSON block ```json ... ```
+        json_match = re.search(r"```(?:json)?\s*(.*?)\s*```", content, re.DOTALL | re.IGNORECASE)
+        if json_match:
+            content = json_match.group(1).strip()
+        else:
+            # Fallback: find outermost curly braces
+            brace_match = re.search(r"(\{.*\})", content, re.DOTALL)
+            if brace_match:
+                content = brace_match.group(1).strip()
+                
+        result = json.loads(content)
         
         # Ensure schema
         if "security" not in result: result["security"] = []

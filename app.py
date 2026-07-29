@@ -3,7 +3,8 @@ import pandas as pd
 import hashlib
 from log_parser import extract_critical_logs
 from ai_engine import generate_remediation_playbook, chat_with_logs, generate_proactive_defenses, generate_log_query
-from s3_fetcher import list_s3_buckets, fetch_latest_s3_log
+from aws_fetcher import list_s3_buckets, fetch_latest_s3_log, fetch_cloudwatch_logs, fetch_cloudtrail_events
+from ini_parser import parse_aws_extension_ini
 from metrics_engine import generate_timeseries_dataframe
 import time
 import altair as alt
@@ -23,6 +24,10 @@ if "messages" not in st.session_state:
     st.session_state.messages = []
 if "results" not in st.session_state:
     st.session_state.results = {"security": [], "performance": [], "structured_data": []}
+if "role_arn" not in st.session_state:
+    st.session_state.role_arn = ""
+if "source_context" not in st.session_state:
+    st.session_state.source_context = "Unknown Source"
 
 # --- CUSTOM STYLING FOR BETTER READABILITY ---
 st.markdown("""
@@ -51,6 +56,7 @@ with st.sidebar:
     st.image("https://img.icons8.com/color/96/000000/cloud-lighting.png", width=60)
     st.title("Settings & Status")
     
+
     st.markdown("### ⚙️ Engine Config")
     st.info("**Model:** `llama3.2:1b` (Local)\n\n**Mode:** Privacy-Preserving")
     
@@ -99,50 +105,95 @@ with main_tab1:
             st.success(f"📄 Successfully loaded {len(uploaded_files)} file(s).")
             
     with tab3:
-        st.markdown("#### 🪣 AWS S3 Auto-Sync")
-        buckets, err = list_s3_buckets()
-        if err:
-            st.error(err)
-            bucket = st.text_input("S3 Bucket Name manually")
-        else:
-            bucket = st.selectbox("Select S3 Bucket", buckets) if buckets else st.text_input("S3 Bucket Name manually")
+        st.markdown("#### ☁️ Fetch AWS Telemetry")
+        
+        with st.expander("🔑 AWS Auth (POD SSO) - Cross-Account Access", expanded=True):
+            st.warning("⚠️ **Note:** This multi-account authentication feature is currently a work-in-progress and might not work as expected in all environments.")
+            st.caption("Input the client's Assume Role ARN to switch context. Base auth uses your SSO login.")
             
-        col1, col2 = st.columns(2)
-        with col1:
-            if st.button("Fetch Latest S3 Log", type="primary", use_container_width=True):
+            # INI Config Integration
+            ini_config = st.text_area(
+                "AWS Extension Config (INI)", 
+                placeholder="[profile my-client]\nrole_arn = arn:aws:iam::123...", 
+                help="Paste your AWS Extend Switch Roles INI config here to auto-populate a client dropdown.",
+                height=100
+            )
+            
+            role_arn_input = ""
+            if ini_config.strip():
+                profiles = parse_aws_extension_ini(ini_config)
+                if profiles:
+                    selected_profile = st.selectbox("Select Client Profile", options=["Manual ARN Input"] + list(profiles.keys()))
+                    if selected_profile != "Manual ARN Input":
+                        role_arn_input = profiles[selected_profile]
+                        st.success(f"Loaded ARN for {selected_profile}")
+            
+            if not role_arn_input:
+                role_arn_input = st.text_input("Assume Role ARN (Manual)", value=st.session_state.role_arn or "", placeholder="arn:aws:iam::123456789012:role/L1-Admin")
+                
+            st.session_state.role_arn = role_arn_input if (role_arn_input and role_arn_input.strip()) else None
+
+        aws_source = st.radio("Select Source", ["S3 Bucket", "CloudWatch Logs", "CloudTrail Events"], horizontal=True)
+
+        if aws_source == "S3 Bucket":
+            buckets, err = list_s3_buckets(role_arn=st.session_state.role_arn)
+            if err:
+                st.error(err)
+                bucket = st.text_input("S3 Bucket Name manually")
+            else:
+                bucket = st.selectbox("Select S3 Bucket", buckets) if buckets else st.text_input("S3 Bucket Name manually")
+                
+            if st.button("Fetch Latest S3 Log", type="primary"):
                 if bucket:
-                    with st.spinner("Fetching logs from S3..."):
-                        content, msg = fetch_latest_s3_log(bucket)
+                    with st.spinner(f"Fetching from S3 bucket {bucket}..."):
+                        content, msg = fetch_latest_s3_log(bucket, role_arn=st.session_state.role_arn)
                         if "Error" in msg:
                             st.error(msg)
                         else:
                             st.success(msg)
                             log_text = content
+                            st.session_state.source_context = f"S3 Bucket: {bucket}"
                 else:
                     st.error("Please provide a bucket name.")
-        with col2:
-            auto_poll = st.toggle("🔄 Enable Hands-Free Live Auto-Polling", value=st.session_state.get("auto_poll", False))
-            if auto_poll:
-                st.session_state.auto_poll = True
-                st.session_state.poll_bucket = bucket
-            else:
-                st.session_state.auto_poll = False
-                
-        # If auto-polling is active, fetch the latest log automatically
-        if st.session_state.get("auto_poll") and st.session_state.get("poll_bucket"):
-            content, msg = fetch_latest_s3_log(st.session_state.poll_bucket)
-            if "Error" not in msg and content:
-                log_text = content
+
+        elif aws_source == "CloudWatch Logs":
+            log_group = st.text_input("CloudWatch Log Group Name", placeholder="/aws/lambda/my-function")
+            if st.button("Fetch CloudWatch Logs", type="primary"):
+                if log_group:
+                    with st.spinner(f"Fetching logs from {log_group}..."):
+                        content, msg = fetch_cloudwatch_logs(log_group, role_arn=st.session_state.role_arn)
+                        if "Error" in msg:
+                            st.error(msg)
+                        else:
+                            st.success(msg)
+                            log_text = content
+                            st.session_state.source_context = f"CloudWatch: {log_group}"
+                else:
+                    st.error("Please provide a Log Group Name.")
+
+        elif aws_source == "CloudTrail Events":
+            if st.button("Fetch Recent CloudTrail Events", type="primary"):
+                with st.spinner("Fetching CloudTrail events..."):
+                    content, msg = fetch_cloudtrail_events(role_arn=st.session_state.role_arn)
+                    if "Error" in msg:
+                        st.error(msg)
+                    else:
+                        st.success(msg)
+                        log_text = content
+                        st.session_state.source_context = "CloudTrail"
             
     st.markdown("---")
     
     if log_text.strip():
-        current_hash = hashlib.md5(log_text.encode()).hexdigest()
+        # Include source_context in hash so changing sources forces a fresh AI scan
+        hash_input = log_text + st.session_state.get("source_context", "")
+        current_hash = hashlib.md5(hash_input.encode()).hexdigest()
         if current_hash != st.session_state.log_hash or "results" not in st.session_state:
             st.session_state.log_hash = current_hash
             st.session_state.messages = []
             with st.spinner("🤖 AI is actively scanning logs for anomalies... This may take a moment for large files."):
-                st.session_state.results = extract_critical_logs(log_text)
+                # Pass source context into the parsing
+                st.session_state.results = extract_critical_logs(log_text, st.session_state.get("source_context", "Pasted/Uploaded Data"))
                 
         results = st.session_state.results
         num_security = len(results["security"])
@@ -177,8 +228,13 @@ with main_tab1:
                     
                     st.altair_chart(chart, use_container_width=True)
                 
-                st.markdown("#### 📊 Auto-Extracted Context")
-                st.dataframe(pd.DataFrame(results["structured_data"]), use_container_width=True, hide_index=True)
+                st.markdown("#### 📊 Incident History & Extracted Context")
+                df = pd.DataFrame(results["structured_data"])
+                if "Source" in df.columns:
+                    # Move Source to the front
+                    cols = ["Source"] + [c for c in df.columns if c != "Source"]
+                    df = df[cols]
+                st.dataframe(df, use_container_width=True, hide_index=True)
                 
             st.markdown("### 🤖 AI Incident Playbooks")
             tab_sec, tab_perf = st.tabs(["🛡️ Security Events", "⚡ Performance Anomalies"])
