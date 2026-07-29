@@ -105,23 +105,24 @@ def ai_analyze_log_chunk(log_chunk, source_context="Unknown Source"):
         print(f"AI parsing error: {e}")
         return {"security": [], "performance": [], "structured_data": []}
 
-def generate_proactive_defenses(structured_data, raw_logs):
+def generate_proactive_defenses(structured_data, raw_logs, compliance_framework="SOC 2", log_context="Unknown Source"):
     """
-    Generates Compliance mapping and Proactive IAC (Terraform/CLI) defenses.
+    Generates Compliance mapping and Proactive IAC (Terraform/CLI) defenses based on a specific framework.
     """
     if not structured_data and not raw_logs:
         return "No data available for proactive defense generation."
         
     system_prompt = (
-        "You are an expert AWS Security Architect and Compliance Auditor. "
-        "Analyze the provided log context and generate a Proactive Defense & Compliance Report. "
-        "The report MUST be in Markdown format and include:\n\n"
-        "### 🏛️ Compliance & Posture Mapping\n"
-        "- Map detected anomalies to specific CIS AWS Foundations Benchmark or SOC2 violations.\n\n"
+        f"You are an expert AWS Security Architect and Cybersecurity Compliance Auditor. "
+        f"Evaluate the provided {log_context} logs and generate a Proactive Defense & Compliance Audit Report. "
+        f"You MUST specifically evaluate these logs against the {compliance_framework} framework.\n"
+        "The report MUST be in structured Markdown format and include:\n\n"
+        f"### 🏛️ {compliance_framework} Compliance & Posture Mapping\n"
+        f"- Highlight passing checks, violations, and security gaps specific to {compliance_framework}.\n\n"
         "### 🛡️ Auto-Generated Prevention Rules\n"
-        "- Provide exact, ready-to-deploy **Terraform** or **AWS CLI** code to prevent these issues (e.g., AWS WAF rules to block malicious IPs, CloudWatch alarms for 5xx errors).\n\n"
+        "- Provide exact, ready-to-deploy **Terraform** or **AWS CLI** code to remediate these issues and prevent future attacks.\n\n"
         "### ⏱️ Incident Timeline\n"
-        "- Reconstruct a chronological timeline of the events across different sources to show the blast radius.\n"
+        "- Reconstruct a chronological timeline of the events across the architecture to show the blast radius.\n"
     )
     
     context = f"Structured Anomalies:\n{json.dumps(structured_data, indent=2)}\n\nRaw Anomalous Logs:\n{raw_logs}"

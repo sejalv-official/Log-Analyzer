@@ -269,22 +269,42 @@ with main_tab1:
 
 with main_tab2:
     st.info("🛡️ Analyze logs to map to compliance frameworks and generate Terraform/CLI rules to block threats.")
+    col1, col2 = st.columns(2)
+    with col1:
+        compliance_framework = st.selectbox("Compliance Framework", ["SOC 2", "HIPAA", "PCI-DSS", "CIS AWS Foundations Benchmark"])
+    with col2:
+        log_context = st.selectbox("Log Context to Audit", ["S3", "CloudWatch", "CloudTrail", "Application Logs"])
+        
     results = st.session_state.results
     total_flagged = len(results["security"]) + len(results["performance"])
     
     if total_flagged > 0:
-        if st.button("🚀 Generate Compliance & Defense Posture", type="primary", use_container_width=True, key="proact_btn"):
-            with st.spinner("🤖 Llama 3.2 is analyzing compliance and generating IAC defenses..."):
+        if st.button("🚀 Generate Compliance Audit Report", type="primary", use_container_width=True, key="proact_btn"):
+            with st.spinner(f"🤖 Llama 3.2 is auditing logs against {compliance_framework} framework..."):
                 raw_logs_context = "\n".join([str(item) for item in results["security"] + results["performance"]])
-                report = generate_proactive_defenses(results["structured_data"], raw_logs_context)
-                st.markdown("---")
-                st.success("✨ Proactive Defense Analysis Complete!")
-                st.markdown(report)
+                report = generate_proactive_defenses(results["structured_data"], raw_logs_context, compliance_framework, log_context)
+                st.session_state.proactive_report = report
+                
+        if "proactive_report" in st.session_state:
+            st.markdown("---")
+            st.success("✨ Proactive Defense Analysis Complete!")
+            st.markdown(st.session_state.proactive_report)
+            st.download_button(
+                label="📥 Download Audit Report",
+                data=st.session_state.proactive_report,
+                file_name=f"compliance_audit_{compliance_framework.lower().replace(' ', '_')}.md",
+                mime="text/markdown",
+                use_container_width=True
+            )
     else:
         st.warning("⚠️ No security or performance issues detected to generate defenses for. Upload logs in the Log Analysis tab first.")
 
 with main_tab3:
     st.info("🔍 Translate Plain English into perfectly formatted Log Queries (Athena, Splunk, CloudWatch).")
+    
+    if len(st.session_state.results.get("structured_data", [])) == 0:
+        st.warning("⚠️ No logs are currently loaded. The AI will generate a generic query without your specific log schema.")
+        
     query_platform = st.selectbox("Select Target Platform", ["AWS Athena", "CloudWatch Logs Insights", "Splunk SPL", "Datadog"])
     query_prompt = st.text_area("Describe what you want to search for in plain English:", placeholder="e.g., Find all 502 errors grouped by Source IP from the last 24 hours")
     
@@ -304,8 +324,17 @@ with main_tab3:
                 st.markdown(query_code)
 
 with main_tab4:
-    st.markdown("### 💬 Interactive Log Investigation Assistant")
-    st.caption("Ask questions about the anomalies found in the logs. The AI retains context.")
+    col1, col2 = st.columns([4, 1])
+    with col1:
+        st.markdown("### 💬 Interactive Log Investigation Assistant")
+        st.caption("Ask questions about the anomalies found in the logs. The AI retains context.")
+    with col2:
+        if st.button("🗑️ Clear Chat", use_container_width=True):
+            st.session_state.messages = []
+            st.rerun()
+            
+    if len(st.session_state.results.get("security", [])) == 0 and len(st.session_state.results.get("performance", [])) == 0:
+        st.warning("⚠️ You are currently chatting without any logs loaded. Go to Log Analysis to upload logs first for context.")
     
     for msg in st.session_state.messages:
         with st.chat_message(msg["role"]):
