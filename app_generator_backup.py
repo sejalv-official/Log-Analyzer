@@ -1,5 +1,7 @@
-import hashlib
-import os
+from pathlib import Path
+import py_compile
+
+app_code = r'''import hashlib
 import time
 
 import altair as alt
@@ -38,77 +40,6 @@ DEFAULT_RESULTS = {
     "performance": [],
     "structured_data": [],
 }
-
-
-def build_incident_report(results: dict, source_context: str) -> str:
-    """Build a portable Markdown incident report from current analysis results."""
-    security_logs = results.get("security", [])
-    performance_logs = results.get("performance", [])
-    structured_data = results.get("structured_data", [])
-
-    lines = [
-        "# AI-Powered AWS Log Analyzer - Incident Report",
-        "",
-        f"**Source:** {source_context}",
-        f"**Total incidents:** {len(security_logs) + len(performance_logs)}",
-        f"**Security incidents:** {len(security_logs)}",
-        f"**Performance incidents:** {len(performance_logs)}",
-        "",
-        "## Executive Summary",
-        "",
-        (
-            "The analyzer identified incidents that require review. "
-            "Security findings should be validated against CloudTrail and IAM activity, "
-            "while performance findings should be correlated with CloudWatch metrics "
-            "and application telemetry."
-            if security_logs or performance_logs
-            else "No critical security or performance incidents were detected."
-        ),
-        "",
-        "## Security Findings",
-        "",
-    ]
-
-    if security_logs:
-        for index, item in enumerate(security_logs, start=1):
-            lines.append(f"{index}. `{str(item)}`")
-    else:
-        lines.append("No security findings detected.")
-
-    lines.extend(["", "## Performance Findings", ""])
-
-    if performance_logs:
-        for index, item in enumerate(performance_logs, start=1):
-            lines.append(f"{index}. `{str(item)}`")
-    else:
-        lines.append("No performance findings detected.")
-
-    lines.extend(["", "## Structured Incident Details", ""])
-
-    if structured_data:
-        for index, item in enumerate(structured_data, start=1):
-            lines.append(f"### Incident {index}")
-            for key, value in item.items():
-                lines.append(f"- **{key}:** {value}")
-            lines.append("")
-    else:
-        lines.append("No structured incident records are available.")
-
-    lines.extend(
-        [
-            "",
-            "## Recommended Next Actions",
-            "",
-            "1. Validate the affected identity, resource and timestamp in AWS CloudTrail.",
-            "2. Review IAM permissions and apply least privilege.",
-            "3. Correlate performance incidents with CloudWatch metrics and application logs.",
-            "4. Confirm whether the activity was expected or unauthorized.",
-            "5. Record remediation actions and assign an incident owner.",
-        ]
-    )
-
-    return "\n".join(lines)
-
 
 if "log_hash" not in st.session_state:
     st.session_state.log_hash = ""
@@ -282,55 +213,9 @@ with main_tab1:
                 "a work in progress and may not work in every environment."
             )
             st.caption(
-                "Enter AWS credentials for this session, or leave them blank "
-                "to use credentials already configured with AWS CLI/SSO."
+                "Enter the client's AssumeRole ARN. "
+                "Base authentication uses your configured AWS credentials."
             )
-
-            st.markdown("##### Base AWS Credentials")
-            cred_col1, cred_col2 = st.columns(2)
-
-            with cred_col1:
-                aws_access_key = st.text_input(
-                    "AWS Access Key ID",
-                    type="password",
-                    placeholder="AKIA...",
-                    help="Used only by the running Streamlit process.",
-                )
-                aws_session_token = st.text_input(
-                    "AWS Session Token (optional)",
-                    type="password",
-                    help="Required for temporary STS/SSO credentials.",
-                )
-
-            with cred_col2:
-                aws_secret_key = st.text_input(
-                    "AWS Secret Access Key",
-                    type="password",
-                    help="Used only by the running Streamlit process.",
-                )
-                aws_region = st.text_input(
-                    "AWS Region",
-                    value=os.getenv("AWS_DEFAULT_REGION", "us-east-1"),
-                )
-
-            if aws_access_key and aws_secret_key:
-                os.environ["AWS_ACCESS_KEY_ID"] = aws_access_key.strip()
-                os.environ["AWS_SECRET_ACCESS_KEY"] = aws_secret_key.strip()
-
-                if aws_session_token.strip():
-                    os.environ["AWS_SESSION_TOKEN"] = aws_session_token.strip()
-                else:
-                    os.environ.pop("AWS_SESSION_TOKEN", None)
-
-                if aws_region.strip():
-                    os.environ["AWS_DEFAULT_REGION"] = aws_region.strip()
-                    os.environ["AWS_REGION"] = aws_region.strip()
-
-                st.success("AWS credentials loaded for this app session.")
-            elif aws_access_key or aws_secret_key:
-                st.warning(
-                    "Enter both the Access Key ID and Secret Access Key."
-                )
 
             ini_config = st.text_area(
                 "AWS Extension Config (INI)",
@@ -951,35 +836,6 @@ with main_tab2:
             hide_index=True,
         )
 
-        st.markdown("---")
-        st.markdown("#### Export Incident Evidence")
-
-        report_markdown = build_incident_report(
-            results,
-            st.session_state.get("source_context", "Unknown Source"),
-        )
-        incidents_df = pd.DataFrame(incident_rows)
-
-        export_col1, export_col2 = st.columns(2)
-
-        with export_col1:
-            st.download_button(
-                "📥 Download Incident Report",
-                data=report_markdown,
-                file_name="ai_log_analyzer_incident_report.md",
-                mime="text/markdown",
-                width="stretch",
-            )
-
-        with export_col2:
-            st.download_button(
-                "📥 Download Incident CSV",
-                data=incidents_df.to_csv(index=False),
-                file_name="ai_log_analyzer_incidents.csv",
-                mime="text/csv",
-                width="stretch",
-            )
-
 
 # ============================================================
 # TAB 3: PROACTIVE DEFENSE & COMPLIANCE
@@ -1230,3 +1086,9 @@ with main_tab5:
 if st.session_state.get("auto_poll"):
     time.sleep(5)
     st.rerun()
+'''
+
+out = Path("/mnt/data/app.py")
+out.write_text(app_code, encoding="utf-8")
+py_compile.compile(str(out), doraise=True)
+print(out)

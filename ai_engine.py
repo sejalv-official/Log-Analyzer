@@ -35,7 +35,7 @@ def generate_remediation_playbook(error_lines, incident_type="performance"):
     
     try:
         response = ollama.chat(
-            model="llama3.2:1b",
+            model="llama3.2:latest",
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": f"Analyze these raw log entries and output the requested report:\n\n{log_payload}"}
@@ -71,7 +71,7 @@ def ai_analyze_log_chunk(log_chunk, source_context="Unknown Source"):
     
     try:
         response = ollama.chat(
-            model="llama3.2:1b",
+            model="llama3.2:latest",
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": f"Logs:\n{log_chunk}"}
@@ -129,7 +129,7 @@ def generate_proactive_defenses(structured_data, raw_logs, compliance_framework=
     
     try:
         response = ollama.chat(
-            model="llama3.2:1b",
+            model="llama3.2:latest",
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": f"Generate the Proactive Defense & Compliance Report based on this data:\n\n{context}"}
@@ -154,7 +154,7 @@ def generate_log_query(user_prompt, platform, context):
     
     try:
         response = ollama.chat(
-            model="llama3.2:1b",
+            model="llama3.2:latest",
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": f"Write a query for this request: {user_prompt}"}
@@ -186,7 +186,7 @@ def chat_with_logs(user_message, chat_history, log_context):
     
     try:
         response = ollama.chat(
-            model="llama3.2:1b",
+            model="llama3.2:latest",
             messages=messages
         )
         return response.message.content
