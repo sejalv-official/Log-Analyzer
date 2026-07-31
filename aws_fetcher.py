@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import gzip
 import os
+import time
 from typing import Any
 
 import boto3
@@ -93,19 +94,46 @@ def list_cloudwatch_log_groups(
 def fetch_cloudwatch_logs(
     log_group_name: str, role_arn: str | None = None
 ) -> tuple[str | None, str]:
-    """Fetch recent log events from a CloudWatch log group."""
+    """Fetch recent log events from a CloudWatch log group across streams without restrictive time limits."""
     try:
         session = _get_session(role_arn)
         logs = session.client("logs")
+
+        # Look back 24 hours (24 hours * 3600 seconds * 1000 ms)
+        start_time_ms = int((time.time() - (24 * 3600)) * 1000)
+
+        # Approach 1: Filter events across all streams in the group for the past 24 hours
         response = logs.filter_log_events(
             logGroupName=log_group_name,
+            startTime=start_time_ms,
             limit=100,
         )
         events = response.get("events", [])
+
+        # Approach 2 (Fallback): Get latest stream directly if no events in 24 hours
+        if not events:
+            streams_res = logs.describe_log_streams(
+                logGroupName=log_group_name,
+                orderBy="LastEventTime",
+                descending=True,
+                limit=1,
+            )
+            streams = streams_res.get("logStreams", [])
+
+            if streams:
+                latest_stream = streams[0]["logStreamName"]
+                stream_events_res = logs.get_log_events(
+                    logGroupName=log_group_name,
+                    logStreamName=latest_stream,
+                    limit=100,
+                    startFromHead=False,
+                )
+                events = stream_events_res.get("events", [])
+
         if not events:
             return (
                 None,
-                f"No CloudWatch log events were found in {log_group_name} for the last 60 minutes.",
+                f"No CloudWatch log events found in '{log_group_name}'.",
             )
 
         log_lines = [e.get("message", "").strip() for e in events]
