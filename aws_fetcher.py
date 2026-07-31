@@ -144,6 +144,52 @@ def list_s3_buckets(
         )
 
 
+def list_cloudwatch_log_groups(
+    role_arn: str | None = None,
+    region: str | None = None,
+) -> tuple[list[str], str | None]:
+    """
+    Return accessible CloudWatch Log Group names.
+
+    Returns:
+        (log_group_names, error_message)
+    """
+    try:
+        session = _get_session(
+            role_arn=role_arn,
+            region=region,
+        )
+        logs_client = session.client("logs")
+
+        paginator = logs_client.get_paginator("describe_log_groups")
+        log_groups = []
+
+        for page in paginator.paginate():
+            for group in page.get("logGroups", []):
+                name = group.get("logGroupName")
+                if name:
+                    log_groups.append(name)
+
+        return sorted(log_groups), None
+
+    except (
+        ClientError,
+        BotoCoreError,
+        NoCredentialsError,
+        PartialCredentialsError,
+    ) as exc:
+        return [], _format_aws_error(
+            "listing CloudWatch log groups",
+            exc,
+        )
+
+    except Exception as exc:
+        return [], _format_aws_error(
+            "listing CloudWatch log groups",
+            exc,
+        )
+
+
 def _decode_s3_object(
     object_body: bytes,
     object_key: str,

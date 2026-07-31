@@ -16,6 +16,7 @@ from aws_fetcher import (
     fetch_cloudtrail_events,
     fetch_cloudwatch_logs,
     fetch_latest_s3_log,
+    list_cloudwatch_log_groups,
     list_s3_buckets,
 )
 from ini_parser import parse_aws_extension_ini
@@ -431,10 +432,28 @@ with main_tab1:
                         )
 
         elif aws_source == "CloudWatch Logs":
-            log_group = st.text_input(
-                "CloudWatch Log Group Name",
-                placeholder="/aws/lambda/my-function",
+            log_groups, error = list_cloudwatch_log_groups(
+                role_arn=st.session_state.role_arn
             )
+
+            if error:
+                st.caption(f"⚠️ Notice: {error}")
+                log_group = st.text_input(
+                    "CloudWatch Log Group Name",
+                    placeholder="/aws/lambda/my-function",
+                )
+            else:
+                log_group = (
+                    st.selectbox(
+                        "Select CloudWatch Log Group",
+                        options=log_groups,
+                    )
+                    if log_groups
+                    else st.text_input(
+                        "CloudWatch Log Group Name manually",
+                        placeholder="/aws/lambda/my-function",
+                    )
+                )
 
             if st.button(
                 "Fetch CloudWatch Logs",
@@ -442,7 +461,7 @@ with main_tab1:
                 key="fetch_cloudwatch",
             ):
                 if not log_group:
-                    st.error("Please provide a Log Group Name.")
+                    st.error("Please select or provide a Log Group Name.")
                 else:
                     with st.spinner(
                         f"Fetching logs from {log_group}..."
