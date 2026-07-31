@@ -113,16 +113,19 @@ def generate_proactive_defenses(structured_data, raw_logs, compliance_framework=
         return "No data available for proactive defense generation."
         
     system_prompt = (
-        f"You are an expert AWS Security Architect and Cybersecurity Compliance Auditor. "
+        f"You are a patient and expert AWS Security Architect mentoring a junior engineer. "
         f"Evaluate the provided {log_context} logs and generate a Proactive Defense & Compliance Audit Report. "
         f"You MUST specifically evaluate these logs against the {compliance_framework} framework.\n"
-        "The report MUST be in structured Markdown format and include:\n\n"
-        f"### 🏛️ {compliance_framework} Compliance & Posture Mapping\n"
-        f"- Highlight passing checks, violations, and security gaps specific to {compliance_framework}.\n\n"
+        "Explain everything in plain English, avoiding overly complex jargon so a beginner can easily understand.\n"
+        "The report MUST be in structured Markdown format and include the following sections exactly:\n\n"
+        f"### 🎓 Executive Summary\n"
+        f"- A plain-English, jargon-free summary explaining what was found in the logs and why it matters.\n\n"
+        f"### 📊 Log Ingestion Summary\n"
+        f"- Explicitly list what logs were ingested and analyzed (e.g., from {log_context}), and how many anomalies were flagged.\n\n"
+        f"### ✅ {compliance_framework} Checkpoint Validation\n"
+        f"- Explicitly list specific compliance control IDs for {compliance_framework} (e.g., CC6.1, Req 10) and clearly state if this system passed or failed them based on the logs. Explain *why* in simple terms.\n\n"
         "### 🛡️ Auto-Generated Prevention Rules\n"
-        "- Provide exact, ready-to-deploy **Terraform** or **AWS CLI** code to remediate these issues and prevent future attacks.\n\n"
-        "### ⏱️ Incident Timeline\n"
-        "- Reconstruct a chronological timeline of the events across the architecture to show the blast radius.\n"
+        "- Provide step-by-step, easy-to-follow **Terraform** or **AWS CLI** code to fix the issues. Explain *how* and *where* the user should run this code.\n"
     )
     
     context = f"Structured Anomalies:\n{json.dumps(structured_data, indent=2)}\n\nRaw Anomalous Logs:\n{raw_logs}"
@@ -143,11 +146,22 @@ def generate_log_query(user_prompt, platform, context):
     """
     Translates natural language into log querying syntax (e.g., AWS Athena, Splunk SPL).
     """
+    syntax_hints = {
+        "AWS Athena": "Use standard Presto SQL syntax. For HTTP 5xx/4xx or auth errors, use LIKE or REGEXP (e.g., status LIKE '5%'). Example: SELECT * FROM logs WHERE status LIKE '5%' OR lower(message) LIKE '%auth failed%' LIMIT 20",
+        "CloudWatch Logs Insights": "Use CloudWatch Insights syntax with pipe operators. For HTTP 5xx/4xx or auth errors, use regex filters. Example: fields @timestamp, @message | filter @message like /(?i)(5\\d\\d|4\\d\\d|auth failed|access denied)/ | sort @timestamp desc | limit 20",
+        "Splunk SPL": "Use Splunk Processing Language. For HTTP 5xx/4xx or auth errors, use wildcards. Example: index=* (status=5* OR status=4* OR \"auth failed\" OR \"access denied\") | table _time, source, message",
+        "Datadog": "Use Datadog log search syntax. For HTTP 5xx/4xx or auth errors, use ranges or wildcards. Example: status:(>=400 AND <=599) OR \"auth failed\" OR \"access denied\""
+    }
+    hint = syntax_hints.get(platform, "")
+
     system_prompt = (
         f"You are an expert Data Engineer and DevOps specialist in {platform}. "
         f"Your task is to translate the user's natural language request into a highly optimized, perfectly formatted {platform} query. "
-        "You MUST output ONLY the query code block, wrapped in ```sql or appropriate markdown. "
-        "Do not include any other conversational text or explanations. Just the code.\n\n"
+        f"Syntax Hint: {hint}\n\n"
+        "CRITICAL RULES:\n"
+        "1. The query MUST be fully functional and ready to be copy-pasted directly into the platform.\n"
+        "2. If the user asks for 5xx, 4xx, or auth failures, use the platform's proper wildcard or regex syntax for those patterns.\n"
+        "3. You MUST output ONLY the query code block, wrapped in ``` markdown. Do not include any other conversational text, explanations, or placeholders like [your-log-group]. Just the code.\n\n"
         "Here is the context of the logs being analyzed to help you understand column names and structure:\n"
         f"{context}\n"
     )

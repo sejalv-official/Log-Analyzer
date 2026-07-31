@@ -1034,12 +1034,33 @@ with main_tab3:
         )
 
     results = st.session_state.results
-    total_flagged = (
-        len(results.get("security", []))
-        + len(results.get("performance", []))
+    
+    st.markdown("#### 🎯 Select Logs for Evaluation")
+    st.caption("Choose which detected anomalies to include in the compliance audit. The AI will only analyze what you select.")
+    
+    include_security = st.checkbox(
+        f"Include Security Logs ({len(results.get('security', []))} found)", 
+        value=bool(results.get("security"))
+    )
+    include_performance = st.checkbox(
+        f"Include Performance Logs ({len(results.get('performance', []))} found)", 
+        value=bool(results.get("performance"))
     )
 
+    logs_to_evaluate = []
+    if include_security:
+        logs_to_evaluate.extend(results.get("security", []))
+    if include_performance:
+        logs_to_evaluate.extend(results.get("performance", []))
+        
+    total_flagged = len(logs_to_evaluate)
+
     if total_flagged:
+        with st.expander(f"👁️ View Exact Logs Being Sent to AI ({total_flagged} lines)", expanded=False):
+            st.info("No black box here! This is the exact raw data the AI will see to generate your compliance report.")
+            for log in logs_to_evaluate:
+                st.code(str(log), language="log")
+
         if st.button(
             "🚀 Generate Compliance Audit Report",
             type="primary",
@@ -1050,13 +1071,7 @@ with main_tab3:
                 f"🤖 Llama 3.2 is auditing logs against "
                 f"{compliance_framework}..."
             ):
-                raw_context = "\n".join(
-                    str(item)
-                    for item in (
-                        results.get("security", [])
-                        + results.get("performance", [])
-                    )
-                )
+                raw_context = "\n".join(str(item) for item in logs_to_evaluate)
                 st.session_state.proactive_report = (
                     generate_proactive_defenses(
                         results.get("structured_data", []),
