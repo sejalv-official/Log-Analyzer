@@ -33,12 +33,95 @@ st.set_page_config(
 )
 
 
-# --- SESSION STATE ---
+# --- SESSION STATE INITIALIZATION ---
 DEFAULT_RESULTS = {
     "security": [],
     "performance": [],
     "structured_data": [],
 }
+
+STATE_DEFAULTS = {
+    "log_hash": "",
+    "log_text": "",
+    "messages": [],
+    "results": DEFAULT_RESULTS.copy(),
+    "role_arn": "",
+    "source_context": "Unknown Source",
+    "proactive_report": "",
+    "sec_report": "",
+    "perf_report": "",
+    "auto_poll": False,
+    "poll_interval": 10,
+    "selected_bucket": "",
+    "selected_log_group": "",
+    "active_source": "S3 Bucket",
+}
+
+for key, value in STATE_DEFAULTS.items():
+    if key not in st.session_state:
+        st.session_state[key] = value
+
+
+def clear_analysis_state():
+    """Clear all loaded logs and analysis results from state."""
+    st.session_state.log_text = ""
+    st.session_state.log_hash = ""
+    st.session_state.results = DEFAULT_RESULTS.copy()
+    st.session_state.sec_report = ""
+    st.session_state.perf_report = ""
+    st.session_state.proactive_report = ""
+    st.session_state.messages = []
+
+
+def render_playbook_section(
+    incident_type: str,
+    logs: list[str],
+    report_state_key: str,
+    btn_label: str,
+    report_filename: str,
+    alert_message: str,
+    alert_type: str = "error",
+):
+    """Reusable UI component for rendering incident playbooks and snippets."""
+    if not logs:
+        st.success(f"✅ No {incident_type.lower()} risks detected.")
+        return
+
+    if alert_type == "error":
+        st.error(alert_message)
+    else:
+        st.warning(alert_message)
+
+    with st.expander(f"👁️ View Isolated {incident_type} Snippets", expanded=True):
+        for item in logs:
+            st.code(str(item), language="log")
+
+    if st.button(
+        btn_label,
+        type="primary",
+        use_container_width=True,
+        key=f"{incident_type.lower()}_btn",
+    ):
+        with st.spinner(
+            f"🤖 Llama 3.2 is generating an {incident_type} remediation plan..."
+        ):
+            st.session_state[report_state_key] = generate_remediation_playbook(
+                logs, incident_type.lower()
+            )
+
+    report = st.session_state.get(report_state_key, "")
+    if report:
+        st.success(f"✨ {incident_type} Analysis Complete!")
+        st.markdown(report)
+
+        st.download_button(
+            f"📥 Download {incident_type} Report",
+            data=report,
+            file_name=report_filename,
+            mime="text/markdown",
+            use_container_width=True,
+            key=f"dl_{incident_type.lower()}_report",
+        )
 
 
 def build_incident_report(results: dict, source_context: str) -> str:
@@ -111,25 +194,6 @@ def build_incident_report(results: dict, source_context: str) -> str:
     return "\n".join(lines)
 
 
-if "log_hash" not in st.session_state:
-    st.session_state.log_hash = ""
-
-if "messages" not in st.session_state:
-    st.session_state.messages = []
-
-if "results" not in st.session_state:
-    st.session_state.results = DEFAULT_RESULTS.copy()
-
-if "role_arn" not in st.session_state:
-    st.session_state.role_arn = ""
-
-if "source_context" not in st.session_state:
-    st.session_state.source_context = "Unknown Source"
-
-if "proactive_report" not in st.session_state:
-    st.session_state.proactive_report = ""
-
-
 # --- CUSTOM STYLING ---
 st.markdown(
     """
@@ -169,6 +233,26 @@ with st.sidebar:
         "**Model:** `llama3.2:1b` (Local)\n\n"
         "**Mode:** Privacy-Preserving"
     )
+
+    st.markdown("---")
+    st.markdown("### 🔄 Auto-Polling Suite")
+    st.session_state.auto_poll = st.toggle(
+        "Enable Live Auto-Polling",
+        value=st.session_state.auto_poll,
+        help="Continuously polls active AWS log stream and refreshes AI analysis.",
+    )
+
+    if st.session_state.auto_poll:
+        st.session_state.poll_interval = st.slider(
+            "Polling Interval (seconds)",
+            min_value=5,
+            max_value=60,
+            value=st.session_state.poll_interval,
+            step=5,
+        )
+        st.caption(
+            f"⚡ Active: Polling AWS every **{st.session_state.poll_interval}s**"
+        )
 
     st.markdown("---")
     st.markdown("### 📌 Supported Log Formats")
@@ -222,8 +306,6 @@ with main_tab1:
         ]
     )
 
-    log_text = ""
-
     with paste_tab:
         pasted_logs = st.text_area(
             "Paste log lines directly from CloudWatch or terminal:",
@@ -234,8 +316,9 @@ with main_tab1:
             ),
         )
 
-        if pasted_logs:
-            log_text = pasted_logs
+        if pasted_logs and pasted_logs != st.session_state.log_text:
+            clear_analysis_state()
+            st.session_state.log_text = pasted_logs
             st.session_state.source_context = "Pasted Text"
 
     with upload_tab:
@@ -262,14 +345,17 @@ with main_tab1:
                     )
 
             if decoded_files:
-                log_text = "\n".join(decoded_files)
-                st.session_state.source_context = (
-                    "Uploaded Files: "
-                    + ", ".join(file.name for file in uploaded_files)
-                )
-                st.success(
-                    f"📄 Successfully loaded {len(decoded_files)} file(s)."
-                )
+                new_uploaded_text = "\n".join(decoded_files)
+                if new_uploaded_text != st.session_state.log_text:
+                    clear_analysis_state()
+                    st.session_state.log_text = new_uploaded_text
+                    st.session_state.source_context = (
+                        "Uploaded Files: "
+                        + ", ".join(file.name for file in uploaded_files)
+                    )
+                    st.success(
+                        f"📄 Successfully loaded {len(decoded_files)} file(s)."
+                    )
 
     with aws_tab:
         st.markdown("#### ☁️ Fetch AWS Telemetry")
@@ -381,6 +467,16 @@ with main_tab1:
                 else None
             )
 
+            if st.button("🗑️ Clear Session Credentials", type="secondary"):
+                os.environ.pop("AWS_ACCESS_KEY_ID", None)
+                os.environ.pop("AWS_SECRET_ACCESS_KEY", None)
+                os.environ.pop("AWS_SESSION_TOKEN", None)
+                st.session_state.role_arn = ""
+                clear_analysis_state()
+                st.success("Credentials cleared from app session!")
+                st.rerun()
+
+        # Dynamic Source Switcher
         aws_source = st.radio(
             "Select Source",
             [
@@ -390,6 +486,12 @@ with main_tab1:
             ],
             horizontal=True,
         )
+
+        # Clear state when switching between S3 / CloudWatch / CloudTrail
+        if aws_source != st.session_state.active_source:
+            st.session_state.active_source = aws_source
+            clear_analysis_state()
+            st.rerun()
 
         if aws_source == "S3 Bucket":
             buckets, error = list_s3_buckets(
@@ -405,6 +507,8 @@ with main_tab1:
                     if buckets
                     else st.text_input("S3 Bucket Name manually")
                 )
+
+            st.session_state.selected_bucket = bucket
 
             if st.button(
                 "Fetch Latest S3 Log",
@@ -425,8 +529,9 @@ with main_tab1:
                     if "Error" in message:
                         st.error(message)
                     else:
+                        clear_analysis_state()
                         st.success(message)
-                        log_text = content or ""
+                        st.session_state.log_text = content or ""
                         st.session_state.source_context = (
                             f"S3 Bucket: {bucket}"
                         )
@@ -455,6 +560,8 @@ with main_tab1:
                     )
                 )
 
+            st.session_state.selected_log_group = log_group
+
             if st.button(
                 "Fetch CloudWatch Logs",
                 type="primary",
@@ -474,8 +581,9 @@ with main_tab1:
                     if "Error" in message:
                         st.error(message)
                     else:
+                        clear_analysis_state()
                         st.success(message)
-                        log_text = content or ""
+                        st.session_state.log_text = content or ""
                         st.session_state.source_context = (
                             f"CloudWatch: {log_group}"
                         )
@@ -494,11 +602,14 @@ with main_tab1:
                 if "Error" in message:
                     st.error(message)
                 else:
+                    clear_analysis_state()
                     st.success(message)
-                    log_text = content or ""
+                    st.session_state.log_text = content or ""
                     st.session_state.source_context = "CloudTrail"
 
     st.markdown("---")
+
+    log_text = st.session_state.get("log_text", "")
 
     if log_text.strip():
         source_context = st.session_state.get(
@@ -513,6 +624,8 @@ with main_tab1:
         if current_hash != st.session_state.log_hash:
             st.session_state.log_hash = current_hash
             st.session_state.messages = []
+            st.session_state.sec_report = ""
+            st.session_state.perf_report = ""
 
             with st.spinner(
                 "🤖 AI is scanning the logs for anomalies..."
@@ -608,129 +721,88 @@ with main_tab1:
 
                     st.altair_chart(
                         timeline_chart,
-                        width="stretch",
+                        use_container_width=True,
                     )
 
-                st.markdown(
-                    "#### 📊 Extracted Incident Context"
-                )
-                context_df = pd.DataFrame(structured_data)
+            st.markdown("---")
+            st.markdown("### 🛠️ Feature Output Workspaces")
 
-                if "Source" in context_df.columns:
-                    ordered_columns = [
-                        "Source",
-                        *[
-                            column
-                            for column in context_df.columns
-                            if column != "Source"
-                        ],
-                    ]
-                    context_df = context_df[ordered_columns]
-
-                st.dataframe(
-                    context_df,
-                    width="stretch",
-                    hide_index=True,
-                )
-
-            st.markdown("### 🤖 AI Incident Playbooks")
-            security_tab, performance_tab = st.tabs(
+            # Dedicated Output Feature Tabs
+            out_tab1, out_tab2, out_tab3, out_tab4 = st.tabs(
                 [
-                    "🛡️ Security Events",
-                    "⚡ Performance Anomalies",
+                    "🛡️ SecOps Playbook",
+                    "⚡ SRE Performance Playbook",
+                    "👁️ Isolated Log Snippets",
+                    "📋 Extracted Incident Data",
                 ]
             )
 
-            with security_tab:
-                if security_count:
-                    st.error(
-                        "🚨 **High Severity:** Security risks detected."
-                    )
+            # Refactored Clean Tab Rendering using Helper Component
+            with out_tab1:
+                render_playbook_section(
+                    incident_type="Security",
+                    logs=security_logs,
+                    report_state_key="sec_report",
+                    btn_label="🚀 Generate SecOps Playbook",
+                    report_filename="secops_playbook.md",
+                    alert_message="🚨 **High Severity:** Security risks detected.",
+                    alert_type="error",
+                )
 
-                    with st.expander(
-                        "👁️ View Isolated Security Snippets",
-                        expanded=True,
-                    ):
+            with out_tab2:
+                render_playbook_section(
+                    incident_type="Performance",
+                    logs=performance_logs,
+                    report_state_key="perf_report",
+                    btn_label="🚀 Generate SRE Playbook",
+                    report_filename="sre_playbook.md",
+                    alert_message="⚠️ **Medium/High Severity:** Performance bottlenecks detected.",
+                    alert_type="warning",
+                )
+
+            with out_tab3:
+                st.markdown("#### Isolated Anomaly Snippets")
+                snippet_col1, snippet_col2 = st.columns(2)
+
+                with snippet_col1:
+                    st.markdown("##### 🛡️ Security Snippets")
+                    if security_logs:
                         for item in security_logs:
-                            st.code(
-                                str(item),
-                                language="log",
-                            )
+                            st.code(str(item), language="log")
+                    else:
+                        st.caption("No security log snippets found.")
 
-                    if st.button(
-                        "🚀 Generate SecOps Playbook",
-                        type="primary",
-                        width="stretch",
-                        key="sec_btn",
-                    ):
-                        with st.spinner(
-                            "🤖 Llama 3.2 is generating "
-                            "a security remediation plan..."
-                        ):
-                            report = generate_remediation_playbook(
-                                security_logs,
-                                "security",
-                            )
-
-                        st.success("✨ SecOps Analysis Complete!")
-                        st.markdown(report)
-
-                        st.download_button(
-                            "📥 Download SecOps Report",
-                            data=report,
-                            file_name="secops_playbook.md",
-                            mime="text/markdown",
-                            width="stretch",
-                        )
-                else:
-                    st.success("✅ No security risks detected.")
-
-            with performance_tab:
-                if performance_count:
-                    st.warning(
-                        "⚠️ **Medium/High Severity:** "
-                        "Performance bottlenecks detected."
-                    )
-
-                    with st.expander(
-                        "👁️ View Isolated Performance Snippets",
-                        expanded=True,
-                    ):
+                with snippet_col2:
+                    st.markdown("##### ⚡ Performance Snippets")
+                    if performance_logs:
                         for item in performance_logs:
-                            st.code(
-                                str(item),
-                                language="log",
-                            )
+                            st.code(str(item), language="log")
+                    else:
+                        st.caption("No performance log snippets found.")
 
-                    if st.button(
-                        "🚀 Generate SRE Playbook",
-                        type="primary",
-                        width="stretch",
-                        key="perf_btn",
-                    ):
-                        with st.spinner(
-                            "🤖 Llama 3.2 is generating "
-                            "an SRE remediation plan..."
-                        ):
-                            report = generate_remediation_playbook(
-                                performance_logs,
-                                "performance",
-                            )
+            with out_tab4:
+                st.markdown("#### Extracted Structured Context")
+                if structured_data:
+                    context_df = pd.DataFrame(structured_data)
 
-                        st.success("✨ SRE Analysis Complete!")
-                        st.markdown(report)
+                    if "Source" in context_df.columns:
+                        ordered_columns = [
+                            "Source",
+                            *[
+                                column
+                                for column in context_df.columns
+                                if column != "Source"
+                            ],
+                        ]
+                        context_df = context_df[ordered_columns]
 
-                        st.download_button(
-                            "📥 Download SRE Report",
-                            data=report,
-                            file_name="sre_playbook.md",
-                            mime="text/markdown",
-                            width="stretch",
-                        )
-                else:
-                    st.success(
-                        "✅ No performance anomalies detected."
+                    st.dataframe(
+                        context_df,
+                        use_container_width=True,
+                        hide_index=True,
                     )
+                else:
+                    st.info("No structured metadata extracted.")
     else:
         st.info(
             "👈 **Get Started:** Paste, upload, or fetch logs "
@@ -820,7 +892,7 @@ with main_tab2:
 
                 st.altair_chart(
                     severity_chart,
-                    width="stretch",
+                    use_container_width=True,
                 )
             else:
                 st.info("Severity data is unavailable.")
@@ -853,7 +925,7 @@ with main_tab2:
 
                 st.altair_chart(
                     category_chart,
-                    width="stretch",
+                    use_container_width=True,
                 )
             else:
                 st.info("Category data is unavailable.")
@@ -896,7 +968,7 @@ with main_tab2:
         if not severity_summary.empty:
             st.dataframe(
                 severity_summary,
-                width="stretch",
+                use_container_width=True,
                 hide_index=True,
             )
 
@@ -937,7 +1009,7 @@ with main_tab2:
 
             st.altair_chart(
                 dashboard_timeline,
-                width="stretch",
+                use_container_width=True,
             )
         else:
             st.info(
@@ -966,7 +1038,7 @@ with main_tab2:
 
         st.dataframe(
             pd.DataFrame(incident_rows).head(20),
-            width="stretch",
+            use_container_width=True,
             hide_index=True,
         )
 
@@ -987,7 +1059,7 @@ with main_tab2:
                 data=report_markdown,
                 file_name="ai_log_analyzer_incident_report.md",
                 mime="text/markdown",
-                width="stretch",
+                use_container_width=True,
             )
 
         with export_col2:
@@ -996,7 +1068,7 @@ with main_tab2:
                 data=incidents_df.to_csv(index=False),
                 file_name="ai_log_analyzer_incidents.csv",
                 mime="text/csv",
-                width="stretch",
+                use_container_width=True,
             )
 
 
@@ -1064,7 +1136,7 @@ with main_tab3:
         if st.button(
             "🚀 Generate Compliance Audit Report",
             type="primary",
-            width="stretch",
+            use_container_width=True,
             key="proact_btn",
         ):
             with st.spinner(
@@ -1096,7 +1168,7 @@ with main_tab3:
                     f"{compliance_framework.lower().replace(' ', '_')}.md"
                 ),
                 mime="text/markdown",
-                width="stretch",
+                use_container_width=True,
             )
     else:
         st.warning(
@@ -1143,7 +1215,7 @@ with main_tab4:
     if st.button(
         "✨ Generate Query Code",
         type="primary",
-        width="stretch",
+        use_container_width=True,
         key="query_btn",
     ):
         if not query_prompt.strip():
@@ -1195,7 +1267,7 @@ with main_tab5:
     with button_column:
         if st.button(
             "🗑️ Clear Chat",
-            width="stretch",
+            use_container_width=True,
             key="clear_chat",
         ):
             st.session_state.messages = []
@@ -1260,7 +1332,24 @@ with main_tab5:
         )
 
 
-# --- OPTIONAL AUTO-POLLING LOOP ---
+# --- AUTOMATED LIVE POLLING LOOP ---
 if st.session_state.get("auto_poll"):
-    time.sleep(5)
+    time.sleep(st.session_state.get("poll_interval", 10))
+
+    # Auto-fetch based on active source context
+    if "CloudWatch" in st.session_state.source_context and st.session_state.selected_log_group:
+        content, _ = fetch_cloudwatch_logs(st.session_state.selected_log_group, role_arn=st.session_state.role_arn)
+        if content:
+            st.session_state.log_text = content
+
+    elif "S3" in st.session_state.source_context and st.session_state.selected_bucket:
+        content, _ = fetch_latest_s3_log(st.session_state.selected_bucket, role_arn=st.session_state.role_arn)
+        if content:
+            st.session_state.log_text = content
+
+    elif "CloudTrail" in st.session_state.source_context:
+        content, _ = fetch_cloudtrail_events(role_arn=st.session_state.role_arn)
+        if content:
+            st.session_state.log_text = content
+
     st.rerun()

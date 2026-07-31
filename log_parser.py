@@ -8,70 +8,163 @@ from datetime import datetime, timezone
 from typing import Any
 
 
-SECURITY_RULES = [
-    ("Critical", "Credential Exposure", re.compile(
-        r"(secret[_ -]?access[_ -]?key|access[_ -]?key|credential(s)? leaked|"
-        r"root user|consolelogin.*failure)",
-        re.IGNORECASE,
-    )),
-    ("High", "Access Denied", re.compile(
-        r"(accessdenied|access denied|unauthorizedoperation|unauthorized|"
-        r"authentication failed|invalidclienttokenid|signaturedoesnotmatch)",
-        re.IGNORECASE,
-    )),
-    ("High", "IAM / Policy Change", re.compile(
-        r"(putuserpolicy|putrolepolicy|attachuserpolicy|attachrolepolicy|"
-        r"createaccesskey|deleteaccesskey|updateassumerolepolicy|"
-        r"iam[:\s_-])",
-        re.IGNORECASE,
-    )),
-    ("High", "Destructive API Call", re.compile(
-        r"(terminateinstances|deletebucket|deleteobject|deletetrail|"
-        r"stoplogging|disableguardduty|disablesecurityhub)",
-        re.IGNORECASE,
-    )),
-    ("Medium", "Suspicious Network Activity", re.compile(
-        r"(rejected connection|network acl deny|blocked ip|port scan|"
-        r"brute force|malicious ip|threat detected)",
-        re.IGNORECASE,
-    )),
+# --- SECURITY RULE DEFINITIONS ---
+SECURITY_RULE_DEFINITIONS = [
+    (
+        "Critical",
+        "Credential Exposure",
+        [
+            r"secret[_ -]?access[_ -]?key",
+            r"access[_ -]?key",
+            r"credential(s)? leaked",
+            r"root user",
+            r"consolelogin.*failure",
+        ],
+    ),
+    (
+        "High",
+        "Access Denied",
+        [
+            r"accessdenied",
+            r"access denied",
+            r"unauthorizedoperation",
+            r"unauthorized",
+            r"authentication failed",
+            r"invalidclienttokenid",
+            r"signaturedoesnotmatch",
+        ],
+    ),
+    (
+        "High",
+        "IAM / Policy Change",
+        [
+            r"putuserpolicy",
+            r"putrolepolicy",
+            r"attachuserpolicy",
+            r"attachrolepolicy",
+            r"createaccesskey",
+            r"deleteaccesskey",
+            r"updateassumerolepolicy",
+            r"iam[:\s_-]",
+        ],
+    ),
+    (
+        "High",
+        "Destructive API Call",
+        [
+            r"terminateinstances",
+            r"deletebucket",
+            r"deleteobject",
+            r"deletetrail",
+            r"stoplogging",
+            r"disableguardduty",
+            r"disablesecurityhub",
+        ],
+    ),
+    (
+        "Medium",
+        "Suspicious Network Activity",
+        [
+            r"rejected connection",
+            r"network acl deny",
+            r"blocked ip",
+            r"port scan",
+            r"brute force",
+            r"malicious ip",
+            r"threat detected",
+        ],
+    ),
 ]
 
-PERFORMANCE_RULES = [
-    ("High", "HTTP 5xx", re.compile(
-        r"(\b5\d{2}\b|bad gateway|service unavailable|gateway timeout)",
-        re.IGNORECASE,
-    )),
-    ("High", "CPU", re.compile(
-        r"(cpu.{0,35}(9[0-9]|100)\s*%|cpu utilization.{0,20}(critical|high)|"
-        r"cpu throttl)",
-        re.IGNORECASE,
-    )),
-    ("High", "Memory", re.compile(
-        r"(memory.{0,35}(9[0-9]|100)\s*%|out of memory|oomkilled|"
-        r"memory pressure|memory utilization.{0,20}(critical|high))",
-        re.IGNORECASE,
-    )),
-    ("Medium", "Timeout", re.compile(
-        r"(timed?\s*out|timeout|connection timeout|read timeout|"
-        r"request timeout)",
-        re.IGNORECASE,
-    )),
-    ("Medium", "Database", re.compile(
-        r"(database connection|db connection|too many connections|"
-        r"deadlock|slow query|rds|aurora).{0,80}(error|failed|timeout|high|critical)",
-        re.IGNORECASE,
-    )),
-    ("Medium", "Container / Kubernetes", re.compile(
-        r"(crashloopbackoff|imagepullbackoff|oomkilled|pod evicted|"
-        r"failed scheduling|pending task|ecs task stopped)",
-        re.IGNORECASE,
-    )),
-    ("Medium", "Application Error", re.compile(
-        r"(\berror\b|\bexception\b|\bfatal\b|\bcritical\b)",
-        re.IGNORECASE,
-    )),
+
+# --- PERFORMANCE RULE DEFINITIONS ---
+PERFORMANCE_RULE_DEFINITIONS = [
+    (
+        "High",
+        "HTTP 5xx",
+        [
+            r"\b5\d{2}\b",
+            r"bad gateway",
+            r"service unavailable",
+            r"gateway timeout",
+        ],
+    ),
+    (
+        "High",
+        "CPU",
+        [
+            r"cpu.{0,35}(9[0-9]|100)\s*%",
+            r"cpu utilization.{0,20}(critical|high)",
+            r"cpu throttl",
+        ],
+    ),
+    (
+        "High",
+        "Memory",
+        [
+            r"memory.{0,35}(9[0-9]|100)\s*%",
+            r"out of memory",
+            r"oomkilled",
+            r"memory pressure",
+            r"memory utilization.{0,20}(critical|high)",
+        ],
+    ),
+    (
+        "Medium",
+        "Timeout",
+        [
+            r"timed?\s*out",
+            r"timeout",
+            r"connection timeout",
+            r"read timeout",
+            r"request timeout",
+        ],
+    ),
+    (
+        "Medium",
+        "Database",
+        [
+            r"(database connection|db connection|too many connections|deadlock|slow query|rds|aurora).{0,80}(error|failed|timeout|high|critical)"
+        ],
+    ),
+    (
+        "Medium",
+        "Container / Kubernetes",
+        [
+            r"crashloopbackoff",
+            r"imagepullbackoff",
+            r"oomkilled",
+            r"pod evicted",
+            r"failed scheduling",
+            r"pending task",
+            r"ecs task stopped",
+        ],
+    ),
+    (
+        "Medium",
+        "Application Error",
+        [
+            r"\berror\b",
+            r"\bexception\b",
+            r"\bfatal\b",
+            r"\bcritical\b",
+        ],
+    ),
 ]
+
+
+# --- HELPER FUNCTION TO COMPILE PATTERNS ---
+def _compile_rules(definitions: list[tuple[str, str, list[str]]]) -> list[tuple[str, str, re.Pattern]]:
+    """Compile list of string patterns into unified regex objects."""
+    compiled_rules = []
+    for severity, category, patterns in definitions:
+        joined_pattern = "(" + "|".join(patterns) + ")"
+        compiled_rules.append((severity, category, re.compile(joined_pattern, re.IGNORECASE)))
+    return compiled_rules
+
+
+SECURITY_RULES = _compile_rules(SECURITY_RULE_DEFINITIONS)
+PERFORMANCE_RULES = _compile_rules(PERFORMANCE_RULE_DEFINITIONS)
 
 
 def _extract_timestamp(line: str) -> str:
