@@ -13,9 +13,11 @@ from ai_engine import (
     generate_remediation_playbook,
 )
 from aws_fetcher import (
+    fetch_all_s3_buckets_logs,
     fetch_cloudtrail_events,
     fetch_cloudwatch_logs,
     fetch_latest_s3_log,
+    get_aws_account_id,
     list_cloudwatch_log_groups,
     list_s3_buckets,
 )
@@ -229,6 +231,10 @@ with st.sidebar:
         "**Mode:** Privacy-Preserving"
     )
 
+    account_id, _ = get_aws_account_id(st.session_state.get("role_arn"))
+    if account_id:
+        st.success(f"🆔 **AWS Account ID:**\n`{account_id}`")
+
     st.markdown("---")
     st.markdown("### 📌 Supported Log Formats")
     st.caption(
@@ -255,7 +261,7 @@ st.markdown(
 )
 
 
-# --- TOP-LEVEL TABS (ALL 5 TABS ARE HERE) ---
+# --- TOP-LEVEL TABS ---
 main_tab1, main_tab2, main_tab3, main_tab4, main_tab5 = st.tabs(
     [
         "📊 Log Analysis & Ingestion",
@@ -332,6 +338,10 @@ with main_tab1:
             "🔑 AWS Auth (POD SSO) - Cross-Account Access",
             expanded=True,
         ):
+            account_id, acc_err = get_aws_account_id(st.session_state.get("role_arn"))
+            if account_id:
+                st.info(f"Connected AWS Account ID: `{account_id}`")
+
             st.warning(
                 "⚠️ **Note:** Cross-account authentication is currently "
                 "a work in progress and may not work in every environment."
@@ -453,32 +463,28 @@ with main_tab1:
         if aws_source == "S3 Bucket":
             buckets, error = list_s3_buckets(role_arn=st.session_state.role_arn)
 
-            if error:
-                st.error(error)
-                bucket = st.text_input("S3 Bucket Name manually")
-            else:
-                bucket = (
-                    st.selectbox("Select S3 Bucket", buckets)
-                    if buckets
-                    else st.text_input("S3 Bucket Name manually")
-                )
+            options_list = ["ALL BUCKETS (Scan Account)"] + (buckets if buckets else [])
+            selected_bkt = st.selectbox("Select S3 Bucket to Fetch", options=options_list)
 
-            st.session_state.selected_bucket = bucket
-
-            if st.button("Fetch Latest S3 Log", type="primary", key="fetch_s3"):
-                if not bucket:
-                    st.error("Please provide a bucket name.")
+            if st.button("Fetch Selected S3 Log", type="primary", key="fetch_s3"):
+                if selected_bkt == "ALL BUCKETS (Scan Account)":
+                    with st.spinner("Scanning ALL S3 buckets in account..."):
+                        content, message = fetch_all_s3_buckets_logs(role_arn=st.session_state.role_arn)
+                    st.session_state.sources_data["S3 Bucket"]["last_msg"] = message
+                    if content:
+                        st.session_state.sources_data["S3 Bucket"]["log_text"] = content
+                        st.session_state.sources_data["S3 Bucket"]["source_context"] = "All S3 Buckets"
                 else:
-                    with st.spinner(f"Fetching from S3 bucket {bucket}..."):
+                    with st.spinner(f"Fetching from S3 bucket '{selected_bkt}'..."):
                         content, message = fetch_latest_s3_log(
-                            bucket,
+                            selected_bkt,
                             role_arn=st.session_state.role_arn,
                         )
 
                     st.session_state.sources_data["S3 Bucket"]["last_msg"] = message
                     if content:
                         st.session_state.sources_data["S3 Bucket"]["log_text"] = content
-                        st.session_state.sources_data["S3 Bucket"]["source_context"] = f"S3 Bucket: {bucket}"
+                        st.session_state.sources_data["S3 Bucket"]["source_context"] = f"S3 Bucket: {selected_bkt}"
 
         elif aws_source == "CloudWatch Logs":
             log_groups, error = list_cloudwatch_log_groups(role_arn=st.session_state.role_arn)
@@ -505,7 +511,7 @@ with main_tab1:
                 if not log_group:
                     st.error("Please select or provide a Log Group Name.")
                 else:
-                    with st.spinner(f"Fetching logs from {log_group}..."):
+                    with st.spinner(f"Fetching ALL log streams from {log_group}..."):
                         content, message = fetch_cloudwatch_logs(
                             log_group,
                             role_arn=st.session_state.role_arn,
@@ -939,13 +945,20 @@ if st.session_state.get("auto_poll"):
             st.session_state.sources_data["CloudWatch Logs"]["log_text"] = content
             st.session_state.sources_data["CloudWatch Logs"]["source_context"] = f"CloudWatch: {log_grp}"
 
-    elif active_src == "S3 Bucket" and st.session_state.get("selected_bucket"):
-        bkt = st.session_state.get("selected_bucket")
-        content, msg = fetch_latest_s3_log(bkt, role_arn=role_arn)
-        st.session_state.sources_data["S3 Bucket"]["last_msg"] = f"⚡ [Auto-Polled] {msg}"
-        if content:
-            st.session_state.sources_data["S3 Bucket"]["log_text"] = content
-            st.session_state.sources_data["S3 Bucket"]["source_context"] = f"S3 Bucket: {bkt}"
+    elif active_src == "S3 Bucket":
+        selected_bkt = st.session_state.get("selected_bucket")
+        if selected_bkt == "ALL BUCKETS (Scan Account)":
+            content, msg = fetch_all_s3_buckets_logs(role_arn=role_arn)
+            st.session_state.sources_data["S3 Bucket"]["last_msg"] = f"⚡ [Auto-Polled] {msg}"
+            if content:
+                st.session_state.sources_data["S3 Bucket"]["log_text"] = content
+                st.session_state.sources_data["S3 Bucket"]["source_context"] = "All S3 Buckets"
+        elif selected_bkt:
+            content, msg = fetch_latest_s3_log(selected_bkt, role_arn=role_arn)
+            st.session_state.sources_data["S3 Bucket"]["last_msg"] = f"⚡ [Auto-Polled] {msg}"
+            if content:
+                st.session_state.sources_data["S3 Bucket"]["log_text"] = content
+                st.session_state.sources_data["S3 Bucket"]["source_context"] = f"S3 Bucket: {selected_bkt}"
 
     elif active_src == "CloudTrail Events":
         content, msg = fetch_cloudtrail_events(role_arn=role_arn)

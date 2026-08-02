@@ -65,6 +65,7 @@ SECURITY_RULE_DEFINITIONS = [
         "Medium",
         "Suspicious Network Activity",
         [
+            r"\bREJECT\b",
             r"rejected connection",
             r"network acl deny",
             r"blocked ip",
@@ -153,7 +154,6 @@ PERFORMANCE_RULE_DEFINITIONS = [
 ]
 
 
-# --- HELPER FUNCTION TO COMPILE PATTERNS ---
 def _compile_rules(definitions: list[tuple[str, str, list[str]]]) -> list[tuple[str, str, re.Pattern]]:
     """Compile list of string patterns into unified regex objects."""
     compiled_rules = []
@@ -200,18 +200,38 @@ def extract_critical_logs(
     log_text: str,
     source_context: str = "Unknown Source",
 ) -> dict[str, list]:
-    """Return security, performance and structured incident data."""
+    """Return security, performance and structured incident data with exact S3 object names."""
 
     security: list[str] = []
     performance: list[str] = []
     structured_data: list[dict[str, str]] = []
     seen: set[tuple[str, str, str]] = set()
 
+    current_object_context = source_context
+    expanded_lines: list[tuple[str, str]] = []
+
     for raw_line in log_text.splitlines():
-        line = _normalise_line(raw_line)
-        if not line:
+        line_str = _normalise_line(raw_line)
+        if not line_str:
             continue
 
+        # Extract S3 Object path headers
+        if line_str.startswith("# S3_OBJECT:"):
+            current_object_context = line_str.replace("# S3_OBJECT:", "").strip()
+            continue
+
+        if line_str.startswith('{"Records"') or line_str.startswith('{"records"'):
+            try:
+                data = json.loads(line_str)
+                records = data.get("Records") or data.get("records") or []
+                for rec in records:
+                    expanded_lines.append((json.dumps(rec, ensure_ascii=False), current_object_context))
+            except Exception:
+                expanded_lines.append((line_str, current_object_context))
+        else:
+            expanded_lines.append((line_str, current_object_context))
+
+    for line, active_source in expanded_lines:
         matched = False
 
         for incident_type, rules in (
@@ -241,7 +261,7 @@ def extract_critical_logs(
                         "Type": incident_type,
                         "Severity": severity,
                         "Category": category,
-                        "Source": source_context,
+                        "Source": active_source,
                         "Message": line,
                     }
                 )
