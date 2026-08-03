@@ -835,32 +835,101 @@ with main_tab3:
         )
 
     with context_column:
-        log_context = st.selectbox("Log Context to Audit", ["S3", "CloudWatch", "CloudTrail", "Application Logs"])
+        available_sources = ["All Sources"] + list(st.session_state.sources_data.keys())
+        selected_audit_source = st.selectbox("Select Log Source to Audit", available_sources)
 
-    all_structured_data = []
-    all_raw_context = []
+    st.markdown("#### 🔍 Selection Context")
 
-    for src_info in st.session_state.sources_data.values():
+    sources_to_audit = (
+        list(st.session_state.sources_data.keys())
+        if selected_audit_source == "All Sources"
+        else [selected_audit_source]
+    )
+
+    available_files = []
+    file_to_content = {}
+
+    for src_name in sources_to_audit:
+        src_info = st.session_state.sources_data[src_name]
+        context = src_info.get("source_context", src_name)
         res = src_info.get("results", {})
-        all_structured_data.extend(res.get("structured_data", []))
-        all_raw_context.extend(res.get("security", []))
-        all_raw_context.extend(res.get("performance", []))
+        sec = res.get("security", [])
+        perf = res.get("performance", [])
+        
+        st.write(f"- **{src_name}**: `{context}` ({len(sec)} Security, {len(perf)} Performance issues)")
 
-    if all_raw_context:
-        if st.button("🚀 Generate Compliance Audit Report", type="primary", use_container_width=True, key="proact_btn"):
-            with st.spinner(f"🤖 Llama 3.2 is auditing logs against {compliance_framework}..."):
-                st.session_state.proactive_report = generate_proactive_defenses(
-                    all_structured_data,
-                    "\n".join(str(i) for i in all_raw_context),
-                    compliance_framework,
-                    log_context,
-                )
+        log_text = src_info.get("log_text", "")
+        if not log_text.strip():
+            continue
+            
+        if src_name == "S3 Bucket":
+            import re
+            parts = re.split(r'(?=# S3_OBJECT: )', log_text)
+            for part in parts:
+                if part.strip():
+                    if part.startswith("# S3_OBJECT: "):
+                        newline_idx = part.find('\n')
+                        if newline_idx != -1:
+                            file_name = part[:newline_idx].replace("# S3_OBJECT: ", "").strip()
+                            content = part[newline_idx+1:].strip()
+                        else:
+                            file_name = part.replace("# S3_OBJECT: ", "").strip()
+                            content = ""
+                            
+                        if file_name not in available_files:
+                            available_files.append(file_name)
+                        file_to_content[file_name] = content
+                    else:
+                        file_name = f"Raw Data ({src_name})"
+                        if file_name not in available_files:
+                            available_files.append(file_name)
+                        file_to_content[file_name] = file_to_content.get(file_name, "") + "\n" + part.strip()
+        else:
+            file_name = context
+            if file_name not in available_files:
+                available_files.append(file_name)
+            file_to_content[file_name] = log_text
 
-        if st.session_state.proactive_report:
-            st.success("✨ Proactive Defense Analysis Complete!")
-            st.markdown(st.session_state.proactive_report)
+    st.markdown("#### 📂 File-Level Selection")
+    
+    if available_files:
+        selected_files = st.multiselect(
+            "Select specific log files or streams to run against the framework (you can run this even if no anomalies were detected):", 
+            available_files, 
+            default=available_files
+        )
+        
+        if selected_files:
+            total_lines = sum(len(file_to_content[f].splitlines()) for f in selected_files)
+            eta_seconds = max(10, 5 + (total_lines // 30))
+            if eta_seconds > 120:
+                eta_str = f"~{eta_seconds // 60} minutes"
+            else:
+                eta_str = f"~{eta_seconds} seconds"
+            
+            st.caption(f"⏱️ **Estimated Audit Time:** {eta_str} (Based on {total_lines} lines of logs)")
+
+            if st.button("🚀 Generate Compliance Audit Report", type="primary", use_container_width=True, key="proact_btn"):
+                with st.spinner(f"🤖 Llama 3.2 is auditing the selected logs against {compliance_framework}... ({eta_str})"):
+                    raw_logs_to_audit = ""
+                    for f in selected_files:
+                        raw_logs_to_audit += f"\n--- {f} ---\n{file_to_content[f]}\n"
+                    
+                    log_context = selected_audit_source if selected_audit_source != "All Sources" else "All Sources"
+                    st.session_state.proactive_report = generate_proactive_defenses(
+                        [], 
+                        raw_logs_to_audit,
+                        compliance_framework,
+                        log_context,
+                    )
+
+            if st.session_state.proactive_report:
+                st.success("✨ Proactive Defense Analysis Complete!")
+                st.markdown(st.session_state.proactive_report)
+        else:
+            st.warning("⚠️ Please select at least one log file/stream to audit.")
     else:
-        st.warning("⚠️ No security or performance issues are available. Fetch logs first.")
+        st.info("No logs have been fetched yet for the selected source(s). Please go to the 'Log Analysis & Ingestion' tab and fetch logs.")
 
 
 # ============================================================
@@ -896,12 +965,67 @@ with main_tab5:
 
     with heading_column:
         st.markdown("### 💬 Interactive Log Investigation Assistant")
-        st.caption("Ask questions about anomalies detected across S3, CloudWatch, or CloudTrail.")
+        st.caption("Ask questions about specific log files, streams, or anomalies detected.")
 
     with button_column:
         if st.button("🗑️ Clear Chat", use_container_width=True, key="clear_chat"):
             st.session_state.messages = []
             st.rerun()
+
+    with st.expander("⚙️ Chat Context Settings", expanded=True):
+        chat_src_col, chat_type_col = st.columns(2)
+        
+        with chat_src_col:
+            available_sources = ["All Sources"] + list(st.session_state.sources_data.keys())
+            chat_audit_source = st.selectbox("Select Log Source", available_sources, key="chat_src")
+            
+        with chat_type_col:
+            chat_context_type = st.selectbox("Context Type", ["Anomalies Only (Faster)", "Raw Logs (Deep Dive)"], key="chat_type")
+            
+        sources_to_chat = (
+            list(st.session_state.sources_data.keys())
+            if chat_audit_source == "All Sources"
+            else [chat_audit_source]
+        )
+
+        chat_available_files = []
+        chat_file_to_content = {}
+        
+        for src_name in sources_to_chat:
+            src_info = st.session_state.sources_data[src_name]
+            log_text = src_info.get("log_text", "")
+            
+            if not log_text.strip():
+                continue
+                
+            if src_name == "S3 Bucket":
+                import re
+                parts = re.split(r'(?=# S3_OBJECT: )', log_text)
+                for part in parts:
+                    if part.strip():
+                        if part.startswith("# S3_OBJECT: "):
+                            newline_idx = part.find('\n')
+                            if newline_idx != -1:
+                                file_name = part[:newline_idx].replace("# S3_OBJECT: ", "").strip()
+                                content = part[newline_idx+1:].strip()
+                            else:
+                                file_name = part.replace("# S3_OBJECT: ", "").strip()
+                                content = ""
+                            if file_name not in chat_available_files:
+                                chat_available_files.append(file_name)
+                            chat_file_to_content[file_name] = content
+                        else:
+                            file_name = f"Raw Data ({src_name})"
+                            if file_name not in chat_available_files:
+                                chat_available_files.append(file_name)
+                            chat_file_to_content[file_name] = chat_file_to_content.get(file_name, "") + "\n" + part.strip()
+            else:
+                file_name = src_info.get("source_context", src_name)
+                if file_name not in chat_available_files:
+                    chat_available_files.append(file_name)
+                chat_file_to_content[file_name] = log_text
+
+        chat_selected_files = st.multiselect("Select specific logs to include in chat:", chat_available_files, default=chat_available_files, key="chat_files")
 
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
@@ -913,11 +1037,27 @@ with main_tab5:
         with st.chat_message("user"):
             st.markdown(prompt)
 
+        # Build context_payload dynamically based on user selection
         context_payload = ""
-        for src_name, src_info in st.session_state.sources_data.items():
-            res = src_info.get("results", {})
-            if res.get("security") or res.get("performance"):
-                context_payload += f"--- {src_name} ---\nSecurity: {res.get('security')}\nPerformance: {res.get('performance')}\n"
+        if not chat_selected_files:
+            context_payload = "No logs selected."
+        else:
+            if chat_context_type == "Raw Logs (Deep Dive)":
+                for f in chat_selected_files:
+                    context_payload += f"--- {f} ---\n{chat_file_to_content[f]}\n\n"
+            else:
+                for f in chat_selected_files:
+                    file_anomalies = []
+                    for src_name in sources_to_chat:
+                        res = st.session_state.sources_data[src_name].get("results", {})
+                        for item in res.get("structured_data", []):
+                            if item.get("Source") == f:
+                                file_anomalies.append(item.get("Message"))
+                    
+                    if file_anomalies:
+                        context_payload += f"--- Anomalies in {f} ---\n" + "\n".join(file_anomalies) + "\n\n"
+                    else:
+                        context_payload += f"--- Anomalies in {f} ---\nNone detected.\n\n"
 
         with st.chat_message("assistant"):
             with st.spinner("Analyzing context..."):
