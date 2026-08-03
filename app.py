@@ -1037,14 +1037,34 @@ with main_tab5:
             st.warning(f"⚠️ No logs have been fetched for '{chat_audit_source}'. Please go to 'Log Analysis & Ingestion' and fetch logs first.")
             chat_selected_files = []
 
+    if not st.session_state.messages:
+        st.markdown(
+            """
+            <div style="text-align: center; padding: 3rem 0;">
+                <h3>👋 Welcome to the AI Log Investigator!</h3>
+                <p style="color: #888;">Select your log context above and ask me anything about your infrastructure.</p>
+            </div>
+            """, 
+            unsafe_allow_html=True
+        )
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.info("🔍 **RCA Analysis**\n\n*What is the root cause of the recent 502 errors?*")
+        with col2:
+            st.info("🛡️ **Security Hunt**\n\n*Are there any unauthorized IAM access attempts?*")
+        with col3:
+            st.info("📊 **Log Summary**\n\n*Summarize the top performance bottlenecks here.*")
+        st.markdown("<br>", unsafe_allow_html=True)
+
     for message in st.session_state.messages:
-        with st.chat_message(message["role"]):
+        avatar = "🧑‍💻" if message["role"] == "user" else "🤖"
+        with st.chat_message(message["role"], avatar=avatar):
             st.markdown(message["content"])
 
     if prompt := st.chat_input("Ask about an IP, error, AWS service, RCA, or query..."):
         st.session_state.messages.append({"role": "user", "content": prompt})
 
-        with st.chat_message("user"):
+        with st.chat_message("user", avatar="🧑‍💻"):
             st.markdown(prompt)
 
         # Build context_payload dynamically based on user selection
@@ -1071,7 +1091,7 @@ with main_tab5:
                     else:
                         context_payload += f"--- Anomalies in {f} ---\nNone detected.\n\n"
 
-        with st.chat_message("assistant"):
+        with st.chat_message("assistant", avatar="🤖"):
             with st.spinner("Analyzing context..."):
                 response = chat_with_logs(prompt, st.session_state.messages[:-1], context_payload)
                 st.markdown(response)
