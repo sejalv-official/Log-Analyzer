@@ -1027,11 +1027,15 @@ with main_tab5:
                     chat_available_files.append(file_name)
                 chat_file_to_content[file_name] = log_text
 
-        chat_selected_files = st.multiselect(
-            "Select specific logs to include in chat (Leave blank to include ALL):", 
-            chat_available_files, 
-            key="chat_files"
-        )
+        if chat_available_files:
+            chat_selected_files = st.multiselect(
+                "Select specific logs to include in chat (Leave blank to include ALL):", 
+                chat_available_files, 
+                key="chat_files"
+            )
+        else:
+            st.warning(f"⚠️ No logs have been fetched for '{chat_audit_source}'. Please go to 'Log Analysis & Ingestion' and fetch logs first.")
+            chat_selected_files = []
 
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
