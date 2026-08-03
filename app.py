@@ -894,13 +894,15 @@ with main_tab3:
     
     if available_files:
         selected_files = st.multiselect(
-            "Select specific log files or streams to run against the framework (you can run this even if no anomalies were detected):", 
+            "Select specific log files or streams to run against the framework (Leave blank to use ALL):", 
             available_files, 
-            default=available_files
+            key="proact_files"
         )
         
-        if selected_files:
-            total_lines = sum(len(file_to_content[f].splitlines()) for f in selected_files)
+        actual_selected_files = selected_files if selected_files else available_files
+        
+        if actual_selected_files:
+            total_lines = sum(len(file_to_content[f].splitlines()) for f in actual_selected_files)
             eta_seconds = max(10, 5 + (total_lines // 30))
             if eta_seconds > 120:
                 eta_str = f"~{eta_seconds // 60} minutes"
@@ -912,7 +914,7 @@ with main_tab3:
             if st.button("🚀 Generate Compliance Audit Report", type="primary", use_container_width=True, key="proact_btn"):
                 with st.spinner(f"🤖 Llama 3.2 is auditing the selected logs against {compliance_framework}... ({eta_str})"):
                     raw_logs_to_audit = ""
-                    for f in selected_files:
+                    for f in actual_selected_files:
                         raw_logs_to_audit += f"\n--- {f} ---\n{file_to_content[f]}\n"
                     
                     log_context = selected_audit_source if selected_audit_source != "All Sources" else "All Sources"
@@ -1025,7 +1027,11 @@ with main_tab5:
                     chat_available_files.append(file_name)
                 chat_file_to_content[file_name] = log_text
 
-        chat_selected_files = st.multiselect("Select specific logs to include in chat:", chat_available_files, default=chat_available_files, key="chat_files")
+        chat_selected_files = st.multiselect(
+            "Select specific logs to include in chat (Leave blank to include ALL):", 
+            chat_available_files, 
+            key="chat_files"
+        )
 
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
@@ -1039,14 +1045,16 @@ with main_tab5:
 
         # Build context_payload dynamically based on user selection
         context_payload = ""
-        if not chat_selected_files:
-            context_payload = "No logs selected."
+        actual_chat_files = chat_selected_files if chat_selected_files else chat_available_files
+        
+        if not actual_chat_files:
+            context_payload = "No logs selected or available."
         else:
             if chat_context_type == "Raw Logs (Deep Dive)":
-                for f in chat_selected_files:
+                for f in actual_chat_files:
                     context_payload += f"--- {f} ---\n{chat_file_to_content[f]}\n\n"
             else:
-                for f in chat_selected_files:
+                for f in actual_chat_files:
                     file_anomalies = []
                     for src_name in sources_to_chat:
                         res = st.session_state.sources_data[src_name].get("results", {})
