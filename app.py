@@ -266,7 +266,7 @@ main_tab1, main_tab2, main_tab3, main_tab4, main_tab5 = st.tabs(
     [
         "📊 Log Analysis & Ingestion",
         "📈 Incident Dashboard",
-        "🛡️ Proactive Defense & Compliance",
+        "🛡️ Compliance & Auto-Remediation",
         "🔍 AI Query Builder",
         "💬 AI Chat Assistant",
     ]
@@ -821,24 +821,27 @@ with main_tab2:
 
 
 # ============================================================
-# TAB 3: PROACTIVE DEFENSE & COMPLIANCE
+# TAB 3: COMPLIANCE & AUTO-REMEDIATION
 # ============================================================
 with main_tab3:
-    st.info("🛡️ Map detected issues to compliance frameworks and generate preventive Terraform or CLI recommendations.")
+    st.markdown("### 🛡️ Compliance Audit & Auto-Remediation Engine")
+    st.caption("Map detected issues to compliance frameworks and generate preventive Terraform or CLI recommendations.")
 
-    framework_column, context_column = st.columns(2)
+    with st.expander("⚙️ Audit Configuration", expanded=True):
+        framework_column, context_column = st.columns(2)
 
-    with framework_column:
-        compliance_framework = st.selectbox(
-            "Compliance Framework",
-            ["SOC 2", "HIPAA", "PCI-DSS", "CIS AWS Foundations Benchmark"],
-        )
+        with framework_column:
+            compliance_framework = st.selectbox(
+                "Target Compliance Framework",
+                ["SOC 2", "HIPAA", "PCI-DSS", "CIS AWS Foundations Benchmark"],
+                help="The AI will evaluate logs specifically against this framework's controls."
+            )
 
-    with context_column:
-        available_sources = ["All Sources"] + list(st.session_state.sources_data.keys())
-        selected_audit_source = st.selectbox("Select Log Source to Audit", available_sources)
+        with context_column:
+            available_sources = ["All Sources"] + list(st.session_state.sources_data.keys())
+            selected_audit_source = st.selectbox("Select Log Source to Audit", available_sources)
 
-    st.markdown("#### 🔍 Selection Context")
+    st.markdown("#### 🔍 Active Audit Context")
 
     sources_to_audit = (
         list(st.session_state.sources_data.keys())
