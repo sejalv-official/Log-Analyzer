@@ -938,24 +938,49 @@ with main_tab3:
 # TAB 4: AI QUERY BUILDER
 # ============================================================
 with main_tab4:
-    st.info("🔍 Translate plain English into queries for Athena, CloudWatch Logs Insights, Splunk, or Datadog.")
+    st.markdown("### 🔎 AI Query Builder")
+    st.caption("Translate plain English into complex, optimized queries for your favorite log management platforms.")
 
-    query_platform = st.selectbox(
-        "Select Target Platform",
-        ["AWS Athena", "CloudWatch Logs Insights", "Splunk SPL", "Datadog"],
-    )
+    with st.expander("💡 Quick Start Templates", expanded=False):
+        t_col1, t_col2 = st.columns(2)
+        with t_col1:
+            if st.button("Top 10 IPs with 4xx/5xx Errors", use_container_width=True):
+                st.session_state.query_prompt_val = "Find the top 10 client IP addresses that generated the most 4xx or 5xx HTTP status codes in the last 24 hours."
+            if st.button("List Failed IAM Logins", use_container_width=True):
+                st.session_state.query_prompt_val = "Show me all failed AWS Console login attempts grouped by IAM user, including the source IP."
+        with t_col2:
+            if st.button("Slowest API Endpoints", use_container_width=True):
+                st.session_state.query_prompt_val = "Find the top 5 slowest API endpoints based on average latency or response time."
+            if st.button("Unusual Port Traffic", use_container_width=True):
+                st.session_state.query_prompt_val = "Show network traffic originating from or going to non-standard ports (exclude 80 and 443)."
+
+    default_prompt = st.session_state.get("query_prompt_val", "")
+
+    st.markdown("#### 🛠️ Build Your Query")
+    
+    plat_col, _ = st.columns([1, 1])
+    with plat_col:
+        query_platform = st.selectbox(
+            "Target Engine",
+            ["AWS Athena", "CloudWatch Logs Insights", "Splunk SPL", "Datadog"],
+            help="The AI will generate syntax specifically for this engine."
+        )
+
     query_prompt = st.text_area(
         "Describe what you want to search for:",
-        placeholder="e.g., Find all 502 errors grouped by source IP from the last 24 hours",
+        value=default_prompt,
+        height=120,
+        placeholder="e.g., Find all 502 errors grouped by source IP from the last 24 hours...",
     )
 
     if st.button("✨ Generate Query Code", type="primary", use_container_width=True, key="query_btn"):
         if not query_prompt.strip():
-            st.error("Please enter a description of the query.")
+            st.warning("⚠️ Please enter a description of the query you want to build.")
         else:
             with st.spinner(f"🤖 Translating your request into {query_platform} syntax..."):
                 query_code = generate_log_query(query_prompt, query_platform, "AWS Log Telemetry Context")
-            st.success(f"✨ {query_platform} Query Generated!")
+            
+            st.success(f"✨ **{query_platform} Query Generated Successfully!**")
             st.markdown(query_code)
 
 
