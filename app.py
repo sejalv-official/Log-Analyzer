@@ -24,6 +24,22 @@ from aws_fetcher import (
 from ini_parser import parse_aws_extension_ini
 from log_parser import extract_critical_logs
 from metrics_engine import calculate_metrics, generate_timeseries_dataframe
+from correlation_engine import find_cross_source_correlations
+from incident_store import (
+    calculate_mttr_minutes,
+    clear_incident_rca,
+    get_correlation,
+    get_incident,
+    get_incident_counts,
+    initialize_database,
+    list_correlations,
+    list_incidents,
+    save_correlation_group,
+    save_detected_incidents,
+    save_incident_rca,
+    update_correlation_status,
+    update_incident_status,
+)
 
 
 # --- PAGE CONFIGURATION ---
@@ -147,6 +163,202 @@ def render_playbook_section(
             use_container_width=True,
             key=f"dl_{source_name}_{incident_type.lower()}_report",
         )
+
+
+def calculate_rca_confidence(incident: dict) -> tuple[int, str]:
+    """
+    Calculate evidence confidence deterministically.
+    The LLM does not choose this score.
+    """
+    score = 35
+
+    events = int(incident.get("event_count") or 1)
+    severity = str(incident.get("severity") or "Unknown")
+    category = str(incident.get("category") or "Other")
+    source = str(incident.get("source") or "Unknown Source")
+
+    if events >= 2:
+        score += 10
+    if events >= 5:
+        score += 10
+
+    if severity in {"High", "Critical"}:
+        score += 10
+
+    if category not in {"", "Other", "Unknown"}:
+        score += 10
+
+    if source not in {"", "Unknown", "Unknown Source"}:
+        score += 10
+
+    if incident.get("first_seen") and incident.get("last_seen"):
+        score += 5
+
+    score = min(score, 95)
+
+    if score >= 85:
+        label = "High"
+    elif score >= 65:
+        label = "Medium"
+    else:
+        label = "Low"
+
+    return score, label
+
+def build_rca_evidence(incident: dict) -> list[str]:
+    """Create transparent evidence used to support the RCA."""
+    evidence = [
+        f"Incident ID: {incident.get('incident_id', 'Unknown')}",
+        f"Source: {incident.get('source', 'Unknown Source')}",
+        f"Type: {incident.get('incident_type', 'Unknown')}",
+        f"Severity: {incident.get('severity', 'Unknown')}",
+        f"Category: {incident.get('category', 'Other')}",
+        f"Correlated log events: {int(incident.get('event_count') or 1)}",
+    ]
+
+    if incident.get("first_seen"):
+        evidence.append(f"First seen: {incident['first_seen']}")
+
+    if incident.get("last_seen"):
+        evidence.append(f"Last seen: {incident['last_seen']}")
+
+    if incident.get("message"):
+        evidence.append(
+            "Representative log evidence: "
+            + str(incident["message"])[:1500]
+        )
+
+    return evidence
+
+def generate_incident_rca(incident: dict):
+    """Generate and package one RCA for one correlated incident."""
+    score, label = calculate_rca_confidence(incident)
+    evidence = build_rca_evidence(incident)
+
+    prompt_context = [
+        "CORRELATED INCIDENT CONTEXT",
+        *evidence,
+        "",
+        "Generate a concise Root Cause Analysis for this one incident.",
+        "Include these sections:",
+        "1. Probable Root Cause",
+        "2. Technical Impact",
+        "3. Supporting Evidence",
+        "4. Immediate Remediation",
+        "5. Long-Term Prevention",
+        "Do not claim certainty beyond the provided evidence.",
+    ]
+
+    incident_type = str(
+        incident.get("incident_type") or "security"
+    ).lower()
+
+    playbook_type = (
+        "security"
+        if incident_type == "security"
+        else "performance"
+    )
+
+    report = generate_remediation_playbook(
+        prompt_context,
+        playbook_type,
+    )
+
+    if not report or not str(report).strip():
+        raise RuntimeError(
+            "The local AI model returned an empty RCA report."
+        )
+
+    return str(report), score, label, evidence
+
+def refresh_cross_source_correlations():
+    """
+    Evaluate persistent incidents and store parent correlation groups.
+    Child incidents are never deleted or modified by this operation.
+    """
+    persistent_incidents = list_incidents(limit=500)
+
+    engine_input = []
+
+    for item in persistent_incidents:
+        engine_input.append(
+            {
+                "incident_id": item.get("Incident ID"),
+                "created_at": item.get("Created At"),
+                "first_seen": item.get("First Seen"),
+                "last_seen": item.get("Last Seen"),
+                "source": item.get("Source"),
+                "incident_type": item.get("Type"),
+                "severity": item.get("Severity"),
+                "category": item.get("Category"),
+                "message": item.get("Message"),
+                "status": item.get("Status"),
+            }
+        )
+
+    candidates = find_cross_source_correlations(
+        engine_input,
+        window_minutes=15,
+        minimum_score=50,
+    )
+
+    created = []
+    updated = []
+
+    for candidate in candidates:
+        correlation_id, created_new = save_correlation_group(
+            candidate
+        )
+
+        if not correlation_id:
+            continue
+
+        if created_new:
+            created.append(correlation_id)
+        else:
+            updated.append(correlation_id)
+
+    return created, updated
+
+def build_correlation_summary(correlation):
+    """
+    Build deterministic context for a cross-source parent incident.
+    """
+    child_incidents = correlation.get("incidents") or []
+
+    lines = [
+        f"Correlation ID: {correlation.get('correlation_id')}",
+        f"Correlation confidence: {correlation.get('confidence', 0)}%",
+        "Sources: "
+        + ", ".join(correlation.get("sources") or []),
+        f"First seen: {correlation.get('first_seen')}",
+        f"Last seen: {correlation.get('last_seen')}",
+        "",
+        "Correlation reasons:",
+    ]
+
+    for reason in correlation.get("reasons") or []:
+        lines.append(f"- {reason}")
+
+    lines.extend(
+        [
+            "",
+            "Related incidents:",
+        ]
+    )
+
+    for incident in child_incidents:
+        lines.extend(
+            [
+                f"- {incident.get('incident_id')}: "
+                f"{incident.get('category')} / "
+                f"{incident.get('severity')} / "
+                f"{incident.get('source')}",
+                f"  Evidence: {str(incident.get('message') or '')[:1000]}",
+            ]
+        )
+
+    return "\n".join(lines)
 
 
 def build_incident_report(sources_data: dict) -> str:
@@ -582,6 +794,21 @@ with main_tab1:
             with st.spinner(f"🤖 AI is scanning {current_source} logs for anomalies..."):
                 active_data["results"] = extract_critical_logs(log_text, source_context)
 
+                # Persist detected incidents in SQLite.
+                # Repeated matching events are correlated by incident_store.py.
+                if active_data["results"].get("structured_data"):
+                    saved_incident_ids = save_detected_incidents(
+                        active_data["results"].get("structured_data", []),
+                        default_source=source_context,
+                    )
+
+                    if saved_incident_ids:
+                        st.success(
+                            f"💾 Created {len(saved_incident_ids)} new incident(s). "
+                            "Repeated matching events were aggregated automatically."
+                        )
+
+
         results = active_data.get("results", DEFAULT_RESULTS)
         security_logs = results.get("security", [])
         performance_logs = results.get("performance", [])
@@ -823,6 +1050,455 @@ with main_tab2:
 # ============================================================
 # TAB 3: COMPLIANCE & AUTO-REMEDIATION
 # ============================================================
+
+    st.markdown("### 🕘 Persistent Incident History")
+    st.caption(
+        "Incidents stored in SQLite remain available after page refreshes "
+        "and Streamlit restarts. Repeated matching log events within a "
+        "15-minute window are correlated into one incident."
+    )
+
+    history = list_incidents(limit=200)
+
+    if history:
+        history_df = pd.DataFrame(history)
+        counts = get_incident_counts()
+        mttr_minutes = calculate_mttr_minutes()
+
+        total_events = int(history_df["Events"].sum()) if "Events" in history_df.columns else len(history_df)
+
+        hist_col1, hist_col2, hist_col3, hist_col4, hist_col5 = st.columns(5)
+        hist_col1.metric("Open", counts.get("Open", 0))
+        hist_col2.metric("Investigating", counts.get("Investigating", 0))
+        hist_col3.metric("Resolved", counts.get("Resolved", 0))
+        hist_col4.metric("Log Events", total_events)
+        hist_col5.metric("MTTR", f"{mttr_minutes} min")
+
+        status_filter = st.multiselect(
+            "Filter by Status",
+            options=["Open", "Investigating", "Resolved"],
+            default=["Open", "Investigating", "Resolved"],
+            key="incident_history_status_filter",
+        )
+
+        filtered_history_df = history_df
+        if status_filter:
+            filtered_history_df = history_df[
+                history_df["Status"].isin(status_filter)
+            ]
+
+        st.dataframe(
+            filtered_history_df,
+            width="stretch",
+            hide_index=True,
+        )
+
+        st.download_button(
+            "📥 Download Incident History CSV",
+            data=history_df.to_csv(index=False),
+            file_name="persistent_incident_history.csv",
+            mime="text/csv",
+            width="stretch",
+            key="download_persistent_incident_history",
+        )
+
+        st.markdown("#### 🔄 Update Incident Status")
+
+        incident_ids = [
+            incident["Incident ID"]
+            for incident in history
+            if incident.get("Incident ID")
+        ]
+
+        status_col1, status_col2 = st.columns(2)
+
+        with status_col1:
+            selected_incident = st.selectbox(
+                "Incident",
+                options=incident_ids,
+                key="history_incident_select",
+            )
+
+        with status_col2:
+            new_status = st.selectbox(
+                "New Status",
+                options=["Open", "Investigating", "Resolved"],
+                key="history_status_select",
+            )
+
+        if st.button(
+            "Update Incident Status",
+            type="primary",
+            width="stretch",
+            key="update_incident_status_button",
+        ):
+            update_incident_status(
+                selected_incident,
+                new_status,
+            )
+            st.success(
+                f"{selected_incident} updated to {new_status}."
+            )
+            st.rerun()
+
+
+        st.markdown("---")
+        st.markdown("### 🤖 AI Root Cause Analysis")
+        st.caption(
+            "Generate one RCA for the correlated incident instead of "
+            "separate RCA reports for every underlying log event."
+        )
+
+        selected_incident_data = get_incident(selected_incident)
+
+        if selected_incident_data:
+            confidence_score, confidence_label = (
+                calculate_rca_confidence(selected_incident_data)
+            )
+
+            rca_metric1, rca_metric2, rca_metric3 = st.columns(3)
+
+            rca_metric1.metric(
+                "Incident",
+                selected_incident,
+            )
+            rca_metric2.metric(
+                "Correlated Events",
+                int(selected_incident_data.get("event_count") or 1),
+            )
+            rca_metric3.metric(
+                "Evidence Confidence",
+                f"{confidence_score}% ({confidence_label})",
+            )
+
+            if selected_incident_data.get("rca_report"):
+                st.success(
+                    "✅ A saved AI RCA is available for this incident."
+                )
+
+                with st.expander(
+                    "🔎 Supporting Evidence",
+                    expanded=False,
+                ):
+                    for evidence_item in (
+                        selected_incident_data.get("rca_evidence") or []
+                    ):
+                        st.markdown(f"- {evidence_item}")
+
+                st.markdown("#### Root Cause Analysis")
+                st.markdown(
+                    selected_incident_data["rca_report"]
+                )
+
+                if selected_incident_data.get("rca_generated_at"):
+                    st.caption(
+                        "Generated at: "
+                        + str(
+                            selected_incident_data["rca_generated_at"]
+                        )
+                    )
+
+                download_col, regenerate_col = st.columns(2)
+
+                with download_col:
+                    st.download_button(
+                        "📥 Download RCA",
+                        data=selected_incident_data["rca_report"],
+                        file_name=f"{selected_incident}_rca.md",
+                        mime="text/markdown",
+                        width="stretch",
+                        key=f"download_rca_{selected_incident}",
+                    )
+
+                with regenerate_col:
+                    if st.button(
+                        "🔄 Regenerate RCA",
+                        width="stretch",
+                        key=f"regenerate_rca_{selected_incident}",
+                    ):
+                        clear_incident_rca(selected_incident)
+                        st.rerun()
+
+            else:
+                with st.expander(
+                    "🔎 Evidence that will be sent to AI",
+                    expanded=True,
+                ):
+                    for evidence_item in build_rca_evidence(
+                        selected_incident_data
+                    ):
+                        st.markdown(f"- {evidence_item}")
+
+                if st.button(
+                    "🤖 Generate AI RCA",
+                    type="primary",
+                    width="stretch",
+                    key=f"generate_rca_{selected_incident}",
+                ):
+                    try:
+                        with st.spinner(
+                            "Llama 3.2 is analyzing the correlated incident..."
+                        ):
+                            (
+                                rca_report,
+                                score,
+                                label,
+                                evidence,
+                            ) = generate_incident_rca(
+                                selected_incident_data
+                            )
+
+                            save_incident_rca(
+                                incident_id=selected_incident,
+                                rca_report=rca_report,
+                                confidence=score,
+                                evidence=evidence,
+                            )
+
+                        st.success(
+                            f"✨ RCA generated with {score}% "
+                            f"{label.lower()} evidence confidence."
+                        )
+                        st.rerun()
+
+                    except Exception as exc:
+                        st.error(
+                            f"Unable to generate RCA: {exc}"
+                        )
+
+    else:
+        st.info(
+            "No persistent incidents have been stored yet. "
+            "Analyze logs containing detected security or performance issues."
+        )
+
+
+
+# ============================================================
+# FEATURE 3: CROSS-SOURCE INCIDENT CORRELATION
+# ============================================================
+with main_tab2:
+    st.markdown("---")
+    st.markdown("### 🔗 Cross-Source Incident Correlation")
+    st.caption(
+        "Correlate related CloudTrail, CloudWatch, ALB/S3 and application "
+        "incidents into a parent incident without deleting the original records."
+    )
+
+    correlation_action_col, correlation_info_col = st.columns([1, 2])
+
+    with correlation_action_col:
+        if st.button(
+            "🔍 Run Correlation Engine",
+            type="primary",
+            width="stretch",
+            key="run_correlation_engine",
+        ):
+            with st.spinner(
+                "Correlating incidents across AWS log sources..."
+            ):
+                created_correlations, updated_correlations = (
+                    refresh_cross_source_correlations()
+                )
+
+            if created_correlations:
+                st.success(
+                    f"Created {len(created_correlations)} new "
+                    "cross-source correlation group(s)."
+                )
+            elif updated_correlations:
+                st.info(
+                    "Existing correlation groups were refreshed."
+                )
+            else:
+                st.info(
+                    "No cross-source incident relationships met "
+                    "the correlation threshold."
+                )
+
+    with correlation_info_col:
+        st.info(
+            "Current rules use a 15-minute window plus shared AWS resources, "
+            "services, error signals, severity and source diversity."
+        )
+
+    correlations = list_correlations(limit=100)
+
+    if correlations:
+        correlation_rows = []
+
+        for correlation in correlations:
+            correlation_rows.append(
+                {
+                    "Correlation ID": correlation.get("correlation_id"),
+                    "Confidence": f"{correlation.get('confidence', 0)}%",
+                    "Sources": ", ".join(
+                        correlation.get("sources") or []
+                    ),
+                    "Related Incidents": ", ".join(
+                        correlation.get("incident_ids") or []
+                    ),
+                    "First Seen": correlation.get("first_seen"),
+                    "Last Seen": correlation.get("last_seen"),
+                    "Status": correlation.get("status"),
+                }
+            )
+
+        st.dataframe(
+            pd.DataFrame(correlation_rows),
+            width="stretch",
+            hide_index=True,
+        )
+
+        correlation_ids = [
+            item.get("correlation_id")
+            for item in correlations
+            if item.get("correlation_id")
+        ]
+
+        selected_correlation = st.selectbox(
+            "Select Correlated Incident",
+            correlation_ids,
+            key="selected_correlation",
+        )
+
+        correlation_detail = get_correlation(
+            selected_correlation
+        )
+
+        if correlation_detail:
+            corr_metric1, corr_metric2, corr_metric3 = st.columns(3)
+
+            corr_metric1.metric(
+                "Correlation",
+                selected_correlation,
+            )
+
+            corr_metric2.metric(
+                "Related Incidents",
+                len(
+                    correlation_detail.get("incident_ids")
+                    or []
+                ),
+            )
+
+            corr_metric3.metric(
+                "Correlation Confidence",
+                f"{correlation_detail.get('confidence', 0)}%",
+            )
+
+            with st.expander(
+                "🔎 Why these incidents were correlated",
+                expanded=True,
+            ):
+                for reason in (
+                    correlation_detail.get("reasons")
+                    or []
+                ):
+                    st.markdown(f"- {reason}")
+
+            st.markdown("#### Related Child Incidents")
+
+            child_rows = []
+
+            for child in (
+                correlation_detail.get("incidents")
+                or []
+            ):
+                child_rows.append(
+                    {
+                        "Incident ID": child.get("incident_id"),
+                        "Source": child.get("source"),
+                        "Type": child.get("incident_type"),
+                        "Severity": child.get("severity"),
+                        "Category": child.get("category"),
+                        "Events": child.get("event_count"),
+                    }
+                )
+
+            st.dataframe(
+                pd.DataFrame(child_rows),
+                width="stretch",
+                hide_index=True,
+            )
+
+            st.markdown("#### Correlation Status")
+
+            corr_status_col1, corr_status_col2 = st.columns(2)
+
+            with corr_status_col1:
+                new_correlation_status = st.selectbox(
+                    "New Correlation Status",
+                    [
+                        "Open",
+                        "Investigating",
+                        "Resolved",
+                    ],
+                    index=[
+                        "Open",
+                        "Investigating",
+                        "Resolved",
+                    ].index(
+                        correlation_detail.get(
+                            "status",
+                            "Open",
+                        )
+                    ),
+                    key=f"correlation_status_{selected_correlation}",
+                )
+
+            with corr_status_col2:
+                st.write("")
+                st.write("")
+
+                if st.button(
+                    "Update Correlation Status",
+                    width="stretch",
+                    key=f"update_corr_{selected_correlation}",
+                ):
+                    update_correlation_status(
+                        selected_correlation,
+                        new_correlation_status,
+                    )
+                    st.success(
+                        f"{selected_correlation} updated to "
+                        f"{new_correlation_status}."
+                    )
+                    st.rerun()
+
+            st.markdown("#### Combined Investigation Context")
+
+            combined_context = build_correlation_summary(
+                correlation_detail
+            )
+
+            st.code(
+                combined_context,
+                language="text",
+            )
+
+            st.download_button(
+                "📥 Download Correlation Evidence",
+                data=combined_context,
+                file_name=f"{selected_correlation}_evidence.txt",
+                mime="text/plain",
+                width="stretch",
+                key=f"download_corr_{selected_correlation}",
+            )
+
+    else:
+        st.info(
+            "No cross-source correlation groups exist yet. "
+            "Analyze incidents from two or more sources and run "
+            "the Correlation Engine."
+        )
+
+
+
+# ============================================================
+# TAB 3: PROACTIVE DEFENSE & COMPLIANCE
+# ============================================================
+
 with main_tab3:
     st.markdown("### 🛡️ Compliance Audit & Auto-Remediation Engine")
     st.caption("Map detected issues to compliance frameworks and generate preventive Terraform or CLI recommendations.")
